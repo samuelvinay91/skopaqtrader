@@ -1,8 +1,10 @@
 <div align="center">
 
+<img src="assets/hero_banner.png" alt="SkopaqTrader AI Platform" width="100%" />
+
 # SkopaqTrader
 
-**India's first self-evolving AI trading platform**
+**India's first self-evolving AI algorithmic trading platform, powered by INDstocks**
 
 Built on [TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) by TauricResearch
 
@@ -22,14 +24,28 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 
 - **Multi-agent analysis** — Analyst team (market, news, social, fundamentals), bull/bear researchers, risk manager, and trader agent collaborate via LangGraph
 - **Multi-model tiering** — Per-role LLM assignment: Gemini 3 Flash (fast/cheap), Claude Opus 4.6 (deep reasoning), Grok (social/X), Perplexity Sonar (web-grounded news)
-- **INDstocks broker integration** — REST + WebSocket for Indian equities (NSE/BSE), with paper trading engine
+- **INDstocks algo trading** — Deep integration with **INDstocks** for seamless algorithmic trading execution on Indian equities (NSE/BSE). Live and paper trading configurations supported out of the box.
 - **Scanner engine** — 30-second multi-model screening cycle on NIFTY 50 watchlist
 - **Safety-first execution** — Immutable position limits, daily loss circuit breakers, stop-loss requirements
+
+![Skopaq Dashboard](assets/dashboard.png)
+*Professional, real-time command center for monitoring agent workflows, market scanners, and live INDstocks execution.*
+
 - **Paper → Live pipeline** — Start paper, graduate to live when ready
 
 > **Disclaimer:** This framework is for research and educational purposes. Trading performance varies based on models, data quality, and market conditions. [It is not financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
 
 ## Architecture
+
+<img src="assets/architecture.png" alt="Skopaq Trading Architecture" width="100%" />
+<br/>
+<sub>*High-level overview of the SkopaqTrader multi-agent system and its direct connection to the INDstocks execution engine.*</sub>
+
+### Agent Workflow
+
+<img src="assets/agent_workflow.png" alt="Agent Workflow" width="100%" />
+<br/>
+<sub>*The flow of data from gathering through multi-agent analysis, risk management, to final execution.*</sub>
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -234,6 +250,7 @@ All changes to the vendored `tradingagents/` directory are documented in [`UPSTR
 **Modification philosophy:** Minimal, surgical changes. The upstream graph runs as a black box via `propagate()`. Skopaq wraps it with execution, safety, and multi-model tiering.
 
 Current upstream modifications:
+
 1. `graph/setup.py` — Added `llm_map` support for per-role LLM assignment
 2. `graph/trading_graph.py` — Pass `llm_map` from config to GraphSetup
 3. `dataflows/indstocks.py` — New file: INDstocks data vendor
@@ -245,6 +262,7 @@ Current upstream modifications:
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 **Quick start:**
+
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/my-feature`)
 3. Write tests for your changes
