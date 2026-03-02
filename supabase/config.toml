@@ -1,0 +1,11 @@
+[project]
+id = ""  # Fill with your Supabase project ID
+
+[api]
+port = 54321
+
+[db]
+port = 54322
+
+[studio]
+port = 54323

@@ -217,3 +217,44 @@ __marimo__/
 
 # Cache
 **/data_cache/
+
+# --- Skopaq additions ---
+# Token encryption file
+.skopaq/
+
+# Supabase local
+supabase/.temp/
+supabase/.branches/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Railway
+.railway/
+
+# Cloudflare
+.cloudflared/
+
+# Results & cache
+results/
+.cache/
+
+# Claude Code
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# dotenv overrides
+.env.local
+.env.*.local

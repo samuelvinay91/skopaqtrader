@@ -1,0 +1,80 @@
+"""Tests for the environment variable bridge."""
+
+import os
+import pytest
+from unittest.mock import MagicMock, patch
+
+from pydantic import SecretStr
+
+
+class TestBridgeEnvVars:
+    """Tests for bridge_env_vars()."""
+
+    def _make_config(self, **kwargs):
+        """Create a mock SkopaqConfig with SecretStr fields.
+
+        All bridged keys default to empty SecretStr so MagicMock's
+        auto-attribute creation doesn't leak non-string values into
+        os.environ.
+        """
+        config = MagicMock()
+        # Set all bridge-mapped keys to empty by default
+        for key in ("google_api_key", "anthropic_api_key", "xai_api_key", "perplexity_api_key", "openrouter_api_key"):
+            setattr(config, key, SecretStr(""))
+        # Override with caller-supplied values
+        for key, value in kwargs.items():
+            setattr(config, key, SecretStr(value) if value else SecretStr(""))
+        return config
+
+    def test_bridges_google_key(self):
+        """SKOPAQ_GOOGLE_API_KEY → GOOGLE_API_KEY."""
+        from skopaq.llm.env_bridge import bridge_env_vars
+
+        config = self._make_config(google_api_key="test-google-key-123")
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GOOGLE_API_KEY", None)
+            bridged = bridge_env_vars(config)
+            # Assert inside the patch.dict block (it restores env on exit)
+            assert "GOOGLE_API_KEY" in bridged
+            assert os.environ.get("GOOGLE_API_KEY") == "test-google-key-123"
+
+    def test_does_not_overwrite_existing(self):
+        """If GOOGLE_API_KEY is already set, bridge should not touch it."""
+        from skopaq.llm.env_bridge import bridge_env_vars
+
+        config = self._make_config(google_api_key="new-key")
+
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "existing-key"}, clear=False):
+            bridged = bridge_env_vars(config)
+            assert "GOOGLE_API_KEY" not in bridged
+            assert os.environ.get("GOOGLE_API_KEY") == "existing-key"
+
+    def test_skips_empty_values(self):
+        """Empty secrets should not be bridged."""
+        from skopaq.llm.env_bridge import bridge_env_vars
+
+        config = self._make_config(google_api_key="", anthropic_api_key="")
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GOOGLE_API_KEY", None)
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            bridged = bridge_env_vars(config)
+
+        assert bridged == []
+
+    def test_bridges_multiple_keys(self):
+        """Multiple keys get bridged in one call."""
+        from skopaq.llm.env_bridge import bridge_env_vars
+
+        config = self._make_config(
+            google_api_key="g-key",
+            anthropic_api_key="a-key",
+            xai_api_key="x-key",
+        )
+
+        with patch.dict(os.environ, {}, clear=False):
+            for var in ["GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY"]:
+                os.environ.pop(var, None)
+            bridged = bridge_env_vars(config)
+            assert set(bridged) == {"GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY"}

@@ -106,6 +106,10 @@ class TradingAgentsGraph:
 
         # Initialize components
         self.conditional_logic = ConditionalLogic()
+
+        # Per-role LLM map (optional — Skopaq passes pre-built instances)
+        llm_map = self.config.get("llm_map")
+
         self.graph_setup = GraphSetup(
             self.quick_thinking_llm,
             self.deep_thinking_llm,
@@ -116,6 +120,7 @@ class TradingAgentsGraph:
             self.invest_judge_memory,
             self.risk_manager_memory,
             self.conditional_logic,
+            llm_map=llm_map,
         )
 
         self.propagator = Propagator()

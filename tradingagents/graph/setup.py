@@ -1,6 +1,6 @@
 # TradingAgents/graph/setup.py
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode
@@ -25,8 +25,16 @@ class GraphSetup:
         invest_judge_memory,
         risk_manager_memory,
         conditional_logic: ConditionalLogic,
+        llm_map: Optional[Dict[str, Any]] = None,
     ):
-        """Initialize with required components."""
+        """Initialize with required components.
+
+        Args:
+            llm_map: Optional per-role LLM mapping.  If provided, each
+                agent node looks up its role key (e.g. ``market_analyst``)
+                in this dict.  Falls back to ``_default`` or the
+                quick/deep pair when a role key is absent.
+        """
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
         self.tool_nodes = tool_nodes
@@ -36,6 +44,15 @@ class GraphSetup:
         self.invest_judge_memory = invest_judge_memory
         self.risk_manager_memory = risk_manager_memory
         self.conditional_logic = conditional_logic
+        self.llm_map = llm_map or {}
+
+    def _get_llm(self, role: str, *, deep: bool = False):
+        """Look up LLM for *role*, falling back to quick/deep pair."""
+        if role in self.llm_map:
+            return self.llm_map[role]
+        if "_default" in self.llm_map:
+            return self.llm_map["_default"]
+        return self.deep_thinking_llm if deep else self.quick_thinking_llm
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
@@ -59,50 +76,50 @@ class GraphSetup:
 
         if "market" in selected_analysts:
             analyst_nodes["market"] = create_market_analyst(
-                self.quick_thinking_llm
+                self._get_llm("market_analyst")
             )
             delete_nodes["market"] = create_msg_delete()
             tool_nodes["market"] = self.tool_nodes["market"]
 
         if "social" in selected_analysts:
             analyst_nodes["social"] = create_social_media_analyst(
-                self.quick_thinking_llm
+                self._get_llm("social_analyst")
             )
             delete_nodes["social"] = create_msg_delete()
             tool_nodes["social"] = self.tool_nodes["social"]
 
         if "news" in selected_analysts:
             analyst_nodes["news"] = create_news_analyst(
-                self.quick_thinking_llm
+                self._get_llm("news_analyst")
             )
             delete_nodes["news"] = create_msg_delete()
             tool_nodes["news"] = self.tool_nodes["news"]
 
         if "fundamentals" in selected_analysts:
             analyst_nodes["fundamentals"] = create_fundamentals_analyst(
-                self.quick_thinking_llm
+                self._get_llm("fundamentals_analyst")
             )
             delete_nodes["fundamentals"] = create_msg_delete()
             tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(
-            self.quick_thinking_llm, self.bull_memory
+            self._get_llm("bull_researcher"), self.bull_memory
         )
         bear_researcher_node = create_bear_researcher(
-            self.quick_thinking_llm, self.bear_memory
+            self._get_llm("bear_researcher"), self.bear_memory
         )
         research_manager_node = create_research_manager(
-            self.deep_thinking_llm, self.invest_judge_memory
+            self._get_llm("research_manager", deep=True), self.invest_judge_memory
         )
-        trader_node = create_trader(self.quick_thinking_llm, self.trader_memory)
+        trader_node = create_trader(self._get_llm("trader"), self.trader_memory)
 
         # Create risk analysis nodes
-        aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
+        aggressive_analyst = create_aggressive_debator(self._get_llm("aggressive_debator"))
+        neutral_analyst = create_neutral_debator(self._get_llm("neutral_debator"))
+        conservative_analyst = create_conservative_debator(self._get_llm("conservative_debator"))
         risk_manager_node = create_risk_manager(
-            self.deep_thinking_llm, self.risk_manager_memory
+            self._get_llm("risk_manager", deep=True), self.risk_manager_memory
         )
 
         # Create workflow

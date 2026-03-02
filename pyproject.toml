@@ -3,12 +3,13 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tradingagents"
-version = "0.2.0"
-description = "TradingAgents: Multi-Agents LLM Financial Trading Framework"
+name = "skopaqtrader"
+version = "0.1.0"
+description = "India's first self-evolving AI trading platform — built on TradingAgents"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
+    # --- Upstream TradingAgents deps ---
     "langchain-core>=0.3.81",
     "backtrader>=1.9.78.123",
     "chainlit>=2.5.5",
@@ -31,10 +32,45 @@ dependencies = [
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=0.2.63",
+    # --- Skopaq additions ---
+    "httpx>=0.28.0",
+    "websockets>=13.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "cryptography>=44.0.0",
+    "apscheduler>=3.10.0",
+    "supabase>=2.11.0",
+    "upstash-redis>=1.1.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "respx>=0.22.0",
+    "ruff>=0.8.0",
 ]
 
 [project.scripts]
 tradingagents = "cli.main:app"
+skopaq = "skopaq.cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "skopaq*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: integration tests requiring external services",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

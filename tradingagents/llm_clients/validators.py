@@ -27,6 +27,9 @@ VALID_MODELS = {
         "gpt-4o-mini",
     ],
     "anthropic": [
+        # Claude 4.6 series (latest, 2026)
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
         # Claude 4.5 series (2025)
         "claude-opus-4-5",
         "claude-sonnet-4-5",

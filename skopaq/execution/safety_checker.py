@@ -1,0 +1,301 @@
+"""Pre-trade safety validation against immutable rules.
+
+Every order passes through ``SafetyChecker.validate()`` before reaching
+the broker or paper engine.  The rules come from ``constants.SAFETY_RULES``
+which is a frozen dataclass — no runtime code can modify them.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from datetime import datetime, time, timezone
+from typing import Optional
+
+from skopaq.broker.models import (
+    Funds,
+    OrderRequest,
+    OrderType,
+    Position,
+    Side,
+    TradingSignal,
+)
+from skopaq.constants import (
+    NSE_MARKET_CLOSE,
+    NSE_MARKET_OPEN,
+    SAFETY_RULES,
+    SafetyRules,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SafetyResult:
+    """Outcome of a safety check."""
+
+    passed: bool
+    rejections: list[str]
+
+    @property
+    def reason(self) -> str:
+        return "; ".join(self.rejections) if self.rejections else ""
+
+
+class SafetyChecker:
+    """Validates orders against immutable safety rules.
+
+    Args:
+        rules: Frozen SafetyRules instance (defaults to global singleton).
+        ist_offset_hours: UTC offset for IST (default 5.5).
+    """
+
+    def __init__(
+        self,
+        rules: SafetyRules = SAFETY_RULES,
+        ist_offset_hours: float = 5.5,
+    ) -> None:
+        self._rules = rules
+        self._ist_offset_hours = ist_offset_hours
+
+        # Intra-day tracking (reset daily)
+        self._orders_this_minute: list[datetime] = []
+        self._day_pnl: float = 0.0
+        self._week_pnl: float = 0.0
+        self._month_pnl: float = 0.0
+        self._last_loss_time: Optional[datetime] = None
+
+    def validate(
+        self,
+        order: OrderRequest,
+        signal: Optional[TradingSignal],
+        positions: list[Position],
+        funds: Funds,
+        portfolio_value: float,
+    ) -> SafetyResult:
+        """Run all safety checks on a proposed order.
+
+        Returns a ``SafetyResult`` with ``passed=True`` if all checks pass,
+        or ``passed=False`` with a list of rejection reasons.
+        """
+        rejections: list[str] = []
+
+        self._check_market_hours(rejections)
+        self._check_position_size(order, portfolio_value, rejections)
+        self._check_order_value(order, rejections)
+        self._check_max_positions(order, positions, rejections)
+        self._check_stop_loss(order, signal, rejections)
+        self._check_daily_loss(portfolio_value, rejections)
+        self._check_weekly_loss(portfolio_value, rejections)
+        self._check_monthly_loss(portfolio_value, rejections)
+        self._check_order_rate(rejections)
+        self._check_cool_down(rejections)
+        self._check_naked_options(order, rejections)
+        self._check_sufficient_funds(order, funds, rejections)
+
+        result = SafetyResult(passed=len(rejections) == 0, rejections=rejections)
+
+        if not result.passed:
+            logger.warning("Order REJECTED: %s %s — %s", order.side, order.symbol, result.reason)
+        else:
+            # Track order timestamp for rate limiting
+            self._orders_this_minute.append(datetime.now(timezone.utc))
+
+        return result
+
+    # ── Individual checks ────────────────────────────────────────────────
+
+    def _check_market_hours(self, rejections: list[str]) -> None:
+        """Reject orders outside NSE market hours (9:15–15:30 IST)."""
+        if not self._rules.market_hours_only:
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        # Convert to IST (UTC + 5:30)
+        ist_hour = (now_utc.hour + int(self._ist_offset_hours)) % 24
+        ist_minute = now_utc.minute + int((self._ist_offset_hours % 1) * 60)
+        if ist_minute >= 60:
+            ist_hour += 1
+            ist_minute -= 60
+        ist_time = time(ist_hour, ist_minute)
+
+        if ist_time < NSE_MARKET_OPEN or ist_time > NSE_MARKET_CLOSE:
+            rejections.append(
+                f"Outside market hours (IST {ist_time.strftime('%H:%M')}, "
+                f"market {NSE_MARKET_OPEN.strftime('%H:%M')}-{NSE_MARKET_CLOSE.strftime('%H:%M')})"
+            )
+
+    def _check_position_size(
+        self, order: OrderRequest, portfolio_value: float, rejections: list[str],
+    ) -> None:
+        """Reject if order exceeds max position % of capital."""
+        if portfolio_value <= 0:
+            return
+        price = order.price or 0
+        if price <= 0:
+            return  # Can't check for market orders without a price estimate
+        order_value = price * order.quantity
+        pct = order_value / portfolio_value
+        if pct > self._rules.max_position_pct:
+            rejections.append(
+                f"Position size {pct:.1%} exceeds max {self._rules.max_position_pct:.0%}"
+            )
+
+    def _check_order_value(self, order: OrderRequest, rejections: list[str]) -> None:
+        """Reject if order value exceeds absolute cap."""
+        price = order.price or 0
+        if price <= 0:
+            return
+        order_value = price * order.quantity
+        if order_value > self._rules.max_order_value_inr:
+            rejections.append(
+                f"Order value INR {order_value:,.0f} exceeds max INR {self._rules.max_order_value_inr:,.0f}"
+            )
+
+    def _check_max_positions(
+        self, order: OrderRequest, positions: list[Position], rejections: list[str],
+    ) -> None:
+        """Reject if opening a new position would exceed max concurrent positions."""
+        if order.side != Side.BUY:
+            return  # Sell reduces positions
+        existing_symbols = {p.symbol for p in positions if p.quantity > 0}
+        if order.symbol not in existing_symbols:
+            if len(existing_symbols) >= self._rules.max_open_positions:
+                rejections.append(
+                    f"Max {self._rules.max_open_positions} open positions reached"
+                )
+
+    def _check_stop_loss(
+        self,
+        order: OrderRequest,
+        signal: Optional[TradingSignal],
+        rejections: list[str],
+    ) -> None:
+        """Reject BUY orders without a stop loss when required."""
+        if not self._rules.require_stop_loss:
+            return
+        if order.side != Side.BUY:
+            return
+
+        has_sl = False
+        # Check if signal has stop_loss
+        if signal and signal.stop_loss and signal.stop_loss > 0:
+            has_sl = True
+        # Check if order itself is SL type
+        if order.order_type in (OrderType.SL, OrderType.SLM):
+            has_sl = True
+        # Check trigger price
+        if order.trigger_price and order.trigger_price > 0:
+            has_sl = True
+
+        if not has_sl:
+            rejections.append("BUY order requires a stop-loss (rule: require_stop_loss=True)")
+
+    def _check_daily_loss(self, portfolio_value: float, rejections: list[str]) -> None:
+        """Reject if daily loss exceeds circuit breaker threshold."""
+        if portfolio_value <= 0:
+            return
+        loss_pct = abs(self._day_pnl) / portfolio_value if self._day_pnl < 0 else 0
+        if loss_pct >= self._rules.max_daily_loss_pct:
+            rejections.append(
+                f"Daily loss {loss_pct:.1%} hit circuit breaker ({self._rules.max_daily_loss_pct:.0%})"
+            )
+
+    def _check_weekly_loss(self, portfolio_value: float, rejections: list[str]) -> None:
+        """Reject if weekly loss exceeds threshold."""
+        if portfolio_value <= 0:
+            return
+        loss_pct = abs(self._week_pnl) / portfolio_value if self._week_pnl < 0 else 0
+        if loss_pct >= self._rules.max_weekly_loss_pct:
+            rejections.append(
+                f"Weekly loss {loss_pct:.1%} hit circuit breaker ({self._rules.max_weekly_loss_pct:.0%})"
+            )
+
+    def _check_monthly_loss(self, portfolio_value: float, rejections: list[str]) -> None:
+        """Reject if monthly loss exceeds threshold."""
+        if portfolio_value <= 0:
+            return
+        loss_pct = abs(self._month_pnl) / portfolio_value if self._month_pnl < 0 else 0
+        if loss_pct >= self._rules.max_monthly_loss_pct:
+            rejections.append(
+                f"Monthly loss {loss_pct:.1%} hit circuit breaker ({self._rules.max_monthly_loss_pct:.0%})"
+            )
+
+    def _check_order_rate(self, rejections: list[str]) -> None:
+        """Reject if order rate exceeds max orders per minute."""
+        now = datetime.now(timezone.utc)
+        # Prune orders older than 60 seconds
+        cutoff = now.timestamp() - 60
+        self._orders_this_minute = [
+            t for t in self._orders_this_minute if t.timestamp() > cutoff
+        ]
+        if len(self._orders_this_minute) >= self._rules.max_orders_per_minute:
+            rejections.append(
+                f"Rate limit: {len(self._orders_this_minute)} orders in last minute "
+                f"(max {self._rules.max_orders_per_minute})"
+            )
+
+    def _check_cool_down(self, rejections: list[str]) -> None:
+        """Reject if still in cool-down after a loss."""
+        if self._last_loss_time is None:
+            return
+        now = datetime.now(timezone.utc)
+        elapsed = (now - self._last_loss_time).total_seconds() / 60
+        if elapsed < self._rules.cool_down_after_loss_minutes:
+            remaining = self._rules.cool_down_after_loss_minutes - elapsed
+            rejections.append(f"Cool-down active: {remaining:.0f} minutes remaining after loss")
+
+    def _check_naked_options(self, order: OrderRequest, rejections: list[str]) -> None:
+        """Reject naked option selling (placeholder — requires option chain context)."""
+        if not self._rules.no_naked_option_selling:
+            return
+        # Full implementation requires checking if the position has a hedge.
+        # For Phase 1, flag any SELL order on option symbols.
+        # NSE options have a strike price (digits) before CE/PE suffix,
+        # e.g. NIFTY23DEC21000CE. Use regex to avoid false positives
+        # on equity symbols like RELIANCE that happen to end with "CE".
+        _OPTION_RE = re.compile(r"\d+(?:CE|PE)$")
+        if order.side == Side.SELL and _OPTION_RE.search(order.symbol):
+            rejections.append(
+                "Naked option selling is forbidden. Ensure a protective position exists."
+            )
+
+    def _check_sufficient_funds(
+        self, order: OrderRequest, funds: Funds, rejections: list[str],
+    ) -> None:
+        """Reject BUY if insufficient margin."""
+        if order.side != Side.BUY:
+            return
+        price = order.price or 0
+        if price <= 0:
+            return
+        required = price * order.quantity
+        if required > funds.available_margin:
+            rejections.append(
+                f"Insufficient margin: need INR {required:,.0f}, available INR {funds.available_margin:,.0f}"
+            )
+
+    # ── P&L tracking (called externally after fills) ─────────────────────
+
+    def record_pnl(self, pnl: float) -> None:
+        """Record a trade's P&L for loss tracking."""
+        self._day_pnl += pnl
+        self._week_pnl += pnl
+        self._month_pnl += pnl
+        if pnl < 0:
+            self._last_loss_time = datetime.now(timezone.utc)
+
+    def reset_daily(self) -> None:
+        """Reset daily counters (call at start of each trading day)."""
+        self._day_pnl = 0.0
+        self._orders_this_minute.clear()
+        self._last_loss_time = None
+
+    def reset_weekly(self) -> None:
+        """Reset weekly P&L counter."""
+        self._week_pnl = 0.0
+
+    def reset_monthly(self) -> None:
+        """Reset monthly P&L counter."""
+        self._month_pnl = 0.0
