@@ -15,6 +15,7 @@ from uuid import UUID
 from supabase import Client
 
 from skopaq.db.models import (
+    AgentMemoryRecord,
     DailySnapshotRecord,
     HealingEventRecord,
     ModelPredictionRecord,
@@ -117,6 +118,26 @@ class TradeRepository:
             .execute()
         )
         return [TradeRecord(**row) for row in (result.data or [])]
+
+    def find_open_buy(self, symbol: str) -> Optional[TradeRecord]:
+        """Find the most recent BUY trade for *symbol* that hasn't been closed.
+
+        Used by ``TradeLifecycleManager`` to link a SELL trade back to its
+        opening BUY for P&L calculation and reflection triggering.
+        """
+        result = (
+            self._client.table(self._table)
+            .select("*")
+            .eq("symbol", symbol)
+            .eq("side", "BUY")
+            .is_("closed_at", "null")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return TradeRecord(**result.data[0])
+        return None
 
 
 # ── Strategy Versions ────────────────────────────────────────────────────────
@@ -301,4 +322,55 @@ class SnapshotRepository:
         )
         if result.data:
             return DailySnapshotRecord(**result.data[0])
+        return None
+
+
+# ── Agent Memories ──────────────────────────────────────────────────────────
+
+
+class MemoryRepository:
+    """CRUD for the ``agent_memories`` table.
+
+    Each row stores one agent role's full memory (documents + recommendations)
+    as JSONB arrays.  Uses ``UPSERT`` on ``(user_id, role)`` so every save
+    atomically overwrites the previous snapshot.
+    """
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+        self._table = "agent_memories"
+
+    def upsert(self, record: AgentMemoryRecord) -> AgentMemoryRecord:
+        """Insert or update a memory record for a role.
+
+        Uses the ``UNIQUE(user_id, role)`` constraint for atomic upsert.
+        """
+        data = _clean_for_insert(record.model_dump())
+        result = (
+            self._client.table(self._table)
+            .upsert(data, on_conflict="user_id,role")
+            .execute()
+        )
+        return AgentMemoryRecord(**result.data[0]) if result.data else record
+
+    def get_all_roles(self) -> list[AgentMemoryRecord]:
+        """Fetch all memory records for the current user."""
+        result = (
+            self._client.table(self._table)
+            .select("*")
+            .execute()
+        )
+        return [AgentMemoryRecord(**row) for row in (result.data or [])]
+
+    def get_by_role(self, role: str) -> Optional[AgentMemoryRecord]:
+        """Fetch a single role's memory."""
+        result = (
+            self._client.table(self._table)
+            .select("*")
+            .eq("role", role)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return AgentMemoryRecord(**result.data[0])
         return None

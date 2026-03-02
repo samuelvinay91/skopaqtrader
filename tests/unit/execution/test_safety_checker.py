@@ -34,6 +34,7 @@ def rules():
         max_orders_per_minute=5,
         require_stop_loss=True,
         min_stop_loss_pct=0.02,
+        max_lots_per_position=100,  # High limit so other tests don't trip this
         no_naked_option_selling=True,
         market_hours_only=False,  # Disable for testing
         cool_down_after_loss_minutes=5,
@@ -249,6 +250,121 @@ class TestInsufficientFunds:
         result = checker.validate(order, signal_with_sl, [], funds, 500_000)
         assert not result.passed
         assert any("Insufficient margin" in r for r in result.rejections)
+
+
+class TestMinStopLossPct:
+    """Validate that stop-loss distance is at least min_stop_loss_pct from entry."""
+
+    def test_adequate_stop_loss_passes(self, checker, funds, signal_with_sl):
+        """Trigger price 3% below entry → exceeds 2% minimum → passes."""
+        order = OrderRequest(
+            symbol="RELIANCE", exchange=Exchange.NSE, side=Side.BUY,
+            quantity=1, order_type=OrderType.LIMIT, price=2500.0,
+            trigger_price=2425.0,  # 3% below entry
+            product=Product.CNC,
+        )
+        result = checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        assert result.passed
+
+    def test_tight_stop_loss_rejected(self, checker, funds, signal_with_sl):
+        """Trigger price 0.5% below entry → under 2% minimum → rejected."""
+        order = OrderRequest(
+            symbol="RELIANCE", exchange=Exchange.NSE, side=Side.BUY,
+            quantity=1, order_type=OrderType.LIMIT, price=2500.0,
+            trigger_price=2487.5,  # 0.5% below
+            product=Product.CNC,
+        )
+        result = checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        assert not result.passed
+        assert any("Stop loss too tight" in r for r in result.rejections)
+
+    def test_no_trigger_price_skipped(self, checker, funds, signal_with_sl):
+        """No trigger price → check is skipped (handled by _check_stop_loss)."""
+        order = _buy_order(qty=1, price=2500)
+        result = checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        # Should pass — no trigger price to validate against min pct
+        assert result.passed
+
+    def test_sell_order_skipped(self, checker, funds, signal_with_sl):
+        """Sell orders should not be checked for min stop-loss distance."""
+        order = OrderRequest(
+            symbol="RELIANCE", exchange=Exchange.NSE, side=Side.SELL,
+            quantity=1, order_type=OrderType.LIMIT, price=2500.0,
+            trigger_price=2490.0,  # Very tight — but it's a sell
+            product=Product.CNC,
+        )
+        result = checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        assert result.passed
+
+
+class TestMaxLots:
+    """Validate per-position quantity limit."""
+
+    @pytest.fixture
+    def strict_checker(self):
+        """Checker with max_lots_per_position=5 for testing the lot limit."""
+        rules = SafetyRules(
+            max_position_pct=1.0, max_order_value_inr=10_000_000,
+            require_stop_loss=False, market_hours_only=False,
+            max_lots_per_position=5,
+        )
+        return SafetyChecker(rules=rules)
+
+    def test_within_limit_passes(self, strict_checker, funds, signal_with_sl):
+        """Quantity 5 == max_lots_per_position (5) → passes."""
+        order = _buy_order(qty=5, price=100)
+        result = strict_checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        assert result.passed
+
+    def test_exceeds_limit_rejected(self, strict_checker, funds, signal_with_sl):
+        """Quantity 6 > 5 → rejected."""
+        order = _buy_order(qty=6, price=100)
+        result = strict_checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        assert not result.passed
+        assert any("Quantity 6 exceeds max 5" in r for r in result.rejections)
+
+    def test_sell_also_checked(self, strict_checker, funds, signal_with_sl):
+        """Max lots applies to both buy and sell (prevents accidental over-sell)."""
+        order = _sell_order(qty=10, price=100)
+        result = strict_checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        assert not result.passed
+        assert any("exceeds max" in r for r in result.rejections)
+
+
+class TestSectorConcentration:
+    """Validate sector concentration limits in SafetyChecker integration."""
+
+    def test_first_position_passes(self, funds, signal_with_sl):
+        checker = SafetyChecker(
+            rules=SafetyRules(
+                max_position_pct=1.0, max_order_value_inr=10_000_000,
+                require_stop_loss=False, market_hours_only=False,
+                max_lots_per_position=10000,
+            ),
+            max_sector_concentration_pct=0.40,
+        )
+        order = _buy_order("HDFCBANK", qty=10, price=1500)  # 15000 of 1M = 1.5%
+        result = checker.validate(order, signal_with_sl, [], funds, 1_000_000)
+        assert result.passed
+
+    def test_exceeds_sector_limit_rejected(self, funds, signal_with_sl):
+        checker = SafetyChecker(
+            rules=SafetyRules(
+                max_position_pct=1.0, max_order_value_inr=10_000_000,
+                require_stop_loss=False, market_hours_only=False,
+                max_lots_per_position=10000,
+            ),
+            max_sector_concentration_pct=0.30,  # Tight 30% limit
+        )
+        positions = [
+            Position(symbol="HDFCBANK", exchange=Exchange.NSE, product=Product.CNC,
+                     quantity=200, average_price=1500, last_price=1500, pnl=0, day_pnl=0),
+        ]
+        # Existing banking: 200*1500 = 300,000 = 30%
+        order = _buy_order("SBIN", qty=100, price=500)  # +50,000 = 35% > 30%
+        result = checker.validate(order, signal_with_sl, positions, funds, 1_000_000)
+        assert not result.passed
+        assert any("Sector" in r and "BANKING" in r for r in result.rejections)
 
 
 class TestReset:

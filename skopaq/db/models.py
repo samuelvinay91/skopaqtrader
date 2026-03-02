@@ -1,6 +1,7 @@
 """Pydantic models for Supabase database records.
 
-These map 1:1 with the tables in ``supabase/migrations/001_initial.sql``.
+These map 1:1 with the tables in ``supabase/migrations/001_initial.sql``
+and ``002_agent_memories.sql``.
 Used by repositories for typed insert/select operations.
 """
 
@@ -46,7 +47,26 @@ class TradeRecord(BaseModel):
     nifty_level: Optional[Decimal] = None
     india_vix: Optional[Decimal] = None
 
+    # Trade lifecycle (BUY → SELL linkage for reflection)
+    opening_trade_id: Optional[UUID] = None
+    closed_at: Optional[datetime] = None
+
     created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class AgentMemoryRecord(BaseModel):
+    """Row in the ``agent_memories`` table.
+
+    Stores serialized BM25 memory for a single agent role.
+    documents and recommendations are parallel JSONB arrays.
+    """
+
+    id: Optional[UUID] = None
+    user_id: Optional[UUID] = None
+    role: str  # 'bull_memory', 'bear_memory', etc.
+    documents: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
     updated_at: Optional[datetime] = None
 
 

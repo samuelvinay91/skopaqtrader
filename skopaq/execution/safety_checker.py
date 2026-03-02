@@ -27,6 +27,7 @@ from skopaq.constants import (
     SAFETY_RULES,
     SafetyRules,
 )
+from skopaq.risk.concentration import ConcentrationChecker
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +56,11 @@ class SafetyChecker:
         self,
         rules: SafetyRules = SAFETY_RULES,
         ist_offset_hours: float = 5.5,
+        max_sector_concentration_pct: float = 0.40,
     ) -> None:
         self._rules = rules
         self._ist_offset_hours = ist_offset_hours
+        self._concentration = ConcentrationChecker(max_sector_concentration_pct)
 
         # Intra-day tracking (reset daily)
         self._orders_this_minute: list[datetime] = []
@@ -86,6 +89,9 @@ class SafetyChecker:
         self._check_order_value(order, rejections)
         self._check_max_positions(order, positions, rejections)
         self._check_stop_loss(order, signal, rejections)
+        self._check_min_stop_loss_pct(order, rejections)
+        self._check_max_lots(order, rejections)
+        self._check_sector_concentration(order, positions, portfolio_value, rejections)
         self._check_daily_loss(portfolio_value, rejections)
         self._check_weekly_loss(portfolio_value, rejections)
         self._check_monthly_loss(portfolio_value, rejections)
@@ -191,6 +197,65 @@ class SafetyChecker:
 
         if not has_sl:
             rejections.append("BUY order requires a stop-loss (rule: require_stop_loss=True)")
+
+    def _check_min_stop_loss_pct(self, order: OrderRequest, rejections: list[str]) -> None:
+        """Reject if stop-loss distance is below the minimum percentage.
+
+        A stop-loss that is too tight (e.g., 0.5% from entry on a 2%+ ATR stock)
+        will get triggered by normal intraday noise, defeating its purpose.
+        """
+        if not self._rules.require_stop_loss:
+            return
+        if order.side != Side.BUY:
+            return
+        if not order.trigger_price or not order.price:
+            return  # No stop-loss price to validate
+        if order.price <= 0:
+            return
+
+        sl_distance = abs(order.price - order.trigger_price) / order.price
+        if sl_distance < self._rules.min_stop_loss_pct:
+            rejections.append(
+                f"Stop loss too tight: {sl_distance:.1%} distance < {self._rules.min_stop_loss_pct:.0%} minimum"
+            )
+
+    def _check_max_lots(self, order: OrderRequest, rejections: list[str]) -> None:
+        """Reject if order quantity exceeds the per-position lot limit.
+
+        Prevents accidentally sized orders (e.g., 50 lots from a parsing error)
+        from reaching the broker.
+        """
+        if order.quantity > self._rules.max_lots_per_position:
+            rejections.append(
+                f"Quantity {order.quantity} exceeds max {self._rules.max_lots_per_position} per position"
+            )
+
+    def _check_sector_concentration(
+        self,
+        order: OrderRequest,
+        positions: list[Position],
+        portfolio_value: float,
+        rejections: list[str],
+    ) -> None:
+        """Reject if adding this order would breach sector concentration limits.
+
+        Delegates to ConcentrationChecker which uses a static NIFTY 50 sector map
+        to classify symbols.  Unknown symbols are allowed through (cannot check).
+        """
+        if order.side != Side.BUY:
+            return  # Only BUY orders increase exposure
+        price = order.price or 0
+        if price <= 0 or portfolio_value <= 0:
+            return
+        order_value = price * order.quantity
+        reason = self._concentration.check(
+            symbol=order.symbol,
+            order_value=order_value,
+            positions=positions,
+            portfolio_value=portfolio_value,
+        )
+        if reason:
+            rejections.append(reason)
 
     def _check_daily_loss(self, portfolio_value: float, rejections: list[str]) -> None:
         """Reject if daily loss exceeds circuit breaker threshold."""

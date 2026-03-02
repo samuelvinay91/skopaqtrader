@@ -42,11 +42,15 @@ class SkopaqTradingGraph:
 
         propagate(symbol, date)  →  parse signal  →  executor.execute_signal()
 
+    When a ``MemoryStore`` is provided, memories are loaded from Supabase
+    before the first ``propagate()`` call, and saved back after reflection.
+
     Args:
         upstream_config: Config dict for TradingAgentsGraph (LLM keys, etc).
         executor: The Skopaq execution pipeline (safety → route → fill).
         selected_analysts: Which upstream analysts to enable.
         debug: Enable upstream debug/tracing mode.
+        memory_store: Optional persistence layer for agent memories.
     """
 
     def __init__(
@@ -55,6 +59,7 @@ class SkopaqTradingGraph:
         executor: Executor,
         selected_analysts: Optional[list[str]] = None,
         debug: bool = False,
+        memory_store: Optional[Any] = None,
     ) -> None:
         self._executor = executor
         self._upstream_config = upstream_config
@@ -62,6 +67,7 @@ class SkopaqTradingGraph:
             "market", "social", "news", "fundamentals",
         ]
         self._debug = debug
+        self._memory_store = memory_store
         self._graph: Any = None  # Lazy-init upstream graph
 
     def _ensure_graph(self) -> Any:
@@ -85,6 +91,15 @@ class SkopaqTradingGraph:
             "Upstream TradingAgentsGraph initialised (analysts=%s, debug=%s)",
             self._selected_analysts, self._debug,
         )
+
+        # Restore persisted memories into the upstream graph's memory objects
+        if self._memory_store is not None:
+            try:
+                loaded = self._memory_store.load(self._graph)
+                logger.info("Agent memories loaded from Supabase (%d entries)", loaded)
+            except Exception:
+                logger.warning("Memory load failed — agents will start with empty memory", exc_info=True)
+
         return self._graph
 
     async def analyze(self, symbol: str, trade_date: str) -> AnalysisResult:
@@ -120,13 +135,25 @@ class SkopaqTradingGraph:
                 duration_seconds=round(duration, 2),
             )
 
-    async def analyze_and_execute(self, symbol: str, trade_date: str) -> AnalysisResult:
+    async def analyze_and_execute(
+        self,
+        symbol: str,
+        trade_date: str,
+        regime_scale: float = 1.0,
+        calendar_scale: float = 1.0,
+    ) -> AnalysisResult:
         """Run upstream analysis and execute the resulting signal.
 
         Full pipeline:
             1. ``upstream.propagate(symbol, date)``  — get agent decision
             2. Parse decision into a ``TradingSignal``
             3. ``executor.execute_signal(signal)``  — safety check → route → fill
+
+        Args:
+            symbol: Stock symbol to analyze and trade.
+            trade_date: Trading date (YYYY-MM-DD).
+            regime_scale: Market regime position multiplier (0.0–1.2).
+            calendar_scale: Event calendar position multiplier (0.0–1.0).
         """
         result = await self.analyze(symbol, trade_date)
 
@@ -138,7 +165,12 @@ class SkopaqTradingGraph:
             return result
 
         # Execute the signal through the full pipeline
-        execution = await self._executor.execute_signal(result.signal)
+        execution = await self._executor.execute_signal(
+            result.signal,
+            trade_date=trade_date,
+            regime_scale=regime_scale,
+            calendar_scale=calendar_scale,
+        )
         result.execution = execution
 
         logger.info(
@@ -151,11 +183,22 @@ class SkopaqTradingGraph:
     def reflect(self, returns_losses: Any) -> None:
         """Invoke upstream reflection to update agent memories.
 
-        Called after a batch of trades to let agents learn from outcomes.
+        Called after a position close (SELL) to let agents learn from the
+        realized P&L.  After the LLM-powered reflection writes lessons into
+        the in-memory BM25 stores, we persist them to Supabase so they
+        survive across sessions.
         """
         graph = self._ensure_graph()
         graph.reflect_and_remember(returns_losses)
         logger.info("Upstream reflection complete")
+
+        # Persist updated memories to Supabase
+        if self._memory_store is not None:
+            try:
+                saved = self._memory_store.save(self._graph)
+                logger.info("Agent memories saved to Supabase (%d entries)", saved)
+            except Exception:
+                logger.warning("Memory save failed — lessons will be lost on exit", exc_info=True)
 
     # ── Signal parsing ───────────────────────────────────────────────────
 

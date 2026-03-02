@@ -142,23 +142,33 @@ def analyze(
 
 async def _run_analyze(symbol: str, trade_date: str):
     """Helper to run async analysis."""
+    from skopaq.broker.paper_engine import PaperEngine
     from skopaq.config import SkopaqConfig
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.safety_checker import SafetyChecker
-    from skopaq.broker.paper_engine import PaperEngine
+    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
 
     config = SkopaqConfig()
     paper = PaperEngine(initial_capital=config.initial_paper_capital)
     router = OrderRouter(config, paper)
-    safety = SafetyChecker()
+    safety = SafetyChecker(
+        max_sector_concentration_pct=config.max_sector_concentration_pct,
+    )
     executor = Executor(router, safety)
 
     # Build upstream config (uses upstream defaults + our keys)
     upstream_config = _build_upstream_config(config)
 
-    graph = SkopaqTradingGraph(upstream_config, executor)
+    # Load persisted memories so agents have context from past trades
+    memory_store = _create_memory_store(config)
+
+    analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
+    graph = SkopaqTradingGraph(
+        upstream_config, executor,
+        selected_analysts=analysts,
+        memory_store=memory_store,
+    )
     return await graph.analyze(symbol, trade_date)
 
 
@@ -194,17 +204,17 @@ async def _run_trade(symbol: str, trade_date: str):
         1. Uses relaxed safety rules (no market-hours or stop-loss gate).
         2. Fetches a real-time quote from INDstocks and injects it into the
            paper engine so ``execute_order()`` can simulate a fill.
+        3. Wires the trade lifecycle manager for auto-reflection on SELL.
     """
-    from skopaq.broker.client import INDstocksClient
     from skopaq.broker.paper_engine import PaperEngine
-    from skopaq.broker.scrip_resolver import resolve_scrip_code
-    from skopaq.broker.token_manager import TokenManager
     from skopaq.config import SkopaqConfig
     from skopaq.constants import PAPER_SAFETY_RULES, SAFETY_RULES
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.safety_checker import SafetyChecker
     from skopaq.graph.skopaq_graph import SkopaqTradingGraph
+
+    from skopaq.risk.position_sizer import PositionSizer
 
     config = SkopaqConfig()
     paper = PaperEngine(initial_capital=config.initial_paper_capital)
@@ -213,17 +223,52 @@ async def _run_trade(symbol: str, trade_date: str):
     rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
 
     router = OrderRouter(config, paper)
-    safety = SafetyChecker(rules=rules)
-    executor = Executor(router, safety)
+    safety = SafetyChecker(
+        rules=rules,
+        max_sector_concentration_pct=config.max_sector_concentration_pct,
+    )
+
+    # ATR-based position sizer (optional)
+    sizer = None
+    if config.position_sizing_enabled:
+        sizer = PositionSizer(
+            risk_per_trade_pct=config.risk_per_trade_pct,
+            atr_multiplier=config.atr_multiplier,
+            atr_period=config.atr_period,
+        )
+
+    executor = Executor(router, safety, position_sizer=sizer)
 
     # For paper mode, fetch a real-time quote and inject into paper engine
     # so the fill simulation has a price to work with.
     if config.trading_mode == "paper":
         await _inject_paper_quote(config, paper, symbol)
 
+    # Compute regime and calendar scales for position sizing
+    regime_scale, calendar_scale = _compute_risk_scales(config, trade_date)
+
     upstream_config = _build_upstream_config(config)
-    graph = SkopaqTradingGraph(upstream_config, executor)
-    return await graph.analyze_and_execute(symbol, trade_date)
+
+    # Load persisted memories + wire lifecycle manager
+    memory_store = _create_memory_store(config)
+    analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
+    graph = SkopaqTradingGraph(
+        upstream_config, executor,
+        selected_analysts=analysts,
+        memory_store=memory_store,
+    )
+
+    result = await graph.analyze_and_execute(
+        symbol, trade_date,
+        regime_scale=regime_scale,
+        calendar_scale=calendar_scale,
+    )
+
+    # Post-execution: track lifecycle (BUY/SELL linkage + reflection)
+    if config.reflection_enabled and memory_store is not None:
+        await _run_lifecycle(config, graph, memory_store, result)
+
+    return result
 
 
 async def _inject_paper_quote(config, paper, symbol: str) -> None:
@@ -318,6 +363,55 @@ def version() -> None:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+def _compute_risk_scales(config, trade_date: str) -> tuple[float, float]:
+    """Compute regime and calendar position-sizing multipliers.
+
+    Returns:
+        (regime_scale, calendar_scale) — both default to 1.0 when disabled.
+    """
+    from datetime import date as date_cls
+
+    regime_scale = 1.0
+    calendar_scale = 1.0
+
+    # Regime detection (India VIX + NIFTY trend)
+    if config.regime_detection_enabled:
+        try:
+            from skopaq.risk.regime import RegimeDetector, fetch_regime_data
+
+            india_vix, nifty_price, nifty_sma200 = fetch_regime_data()
+            detector = RegimeDetector()
+            regime = detector.detect(india_vix, nifty_price, nifty_sma200)
+            regime_scale = regime.position_scale
+
+            if not regime.should_trade:
+                logger.warning(
+                    "Regime detector says NO TRADE: %s VIX=%.1f",
+                    regime.label, regime.vix or 0,
+                )
+        except Exception:
+            logger.warning("Regime detection failed — using default scale", exc_info=True)
+
+    # NSE Event Calendar
+    try:
+        from skopaq.risk.calendar import NSEEventCalendar
+
+        cal = NSEEventCalendar()
+        try:
+            d = date_cls.fromisoformat(trade_date)
+        except (ValueError, TypeError):
+            d = date_cls.today()
+
+        calendar_scale = cal.get_position_scale(d)
+        events = cal.get_events(d)
+        if events:
+            logger.info("Calendar events for %s: %s (scale=%.1f)", d, events, calendar_scale)
+    except Exception:
+        logger.warning("Event calendar check failed — using default scale", exc_info=True)
+
+    return regime_scale, calendar_scale
+
+
 def _build_upstream_config(config) -> dict:
     """Build config dict for upstream TradingAgentsGraph from SkopaqConfig."""
     from pathlib import Path
@@ -335,8 +429,9 @@ def _build_upstream_config(config) -> dict:
         "deep_think_llm": "gemini-3-flash-preview",
         "quick_think_llm": "gemini-3-flash-preview",
         "backend_url": None,
-        "max_debate_rounds": 1,
-        "max_risk_discuss_rounds": 1,
+        "max_debate_rounds": config.max_debate_rounds,
+        "max_risk_discuss_rounds": config.max_risk_discuss_rounds,
+        "google_thinking_level": config.google_thinking_level or None,
         "max_recur_limit": 100,
         # Indian market data vendor routing
         "data_vendors": {
@@ -355,6 +450,56 @@ def _build_upstream_config(config) -> dict:
         logger.warning("Failed to build LLM map — falling back to single-model", exc_info=True)
 
     return upstream
+
+
+def _create_memory_store(config):
+    """Create a MemoryStore if reflection is enabled and Supabase is configured.
+
+    Returns None if either condition is not met (graceful degradation).
+    """
+    if not config.reflection_enabled:
+        return None
+
+    if not config.supabase_url or not config.supabase_service_key.get_secret_value():
+        logger.debug("Supabase not configured — agent memory disabled")
+        return None
+
+    try:
+        from supabase import create_client
+        from skopaq.memory.store import MemoryStore
+
+        client = create_client(
+            config.supabase_url,
+            config.supabase_service_key.get_secret_value(),
+        )
+        return MemoryStore(client, max_entries=config.reflection_max_memory_entries)
+    except Exception:
+        logger.warning("Failed to initialise MemoryStore — continuing without memory", exc_info=True)
+        return None
+
+
+async def _run_lifecycle(config, graph, memory_store, result):
+    """Run trade lifecycle tracking (BUY/SELL linkage + auto-reflection).
+
+    Silently does nothing if Supabase is not configured.
+    """
+    if not config.supabase_url or not config.supabase_service_key.get_secret_value():
+        return
+
+    try:
+        from supabase import create_client
+        from skopaq.db.repositories import TradeRepository
+        from skopaq.memory.lifecycle import TradeLifecycleManager
+
+        client = create_client(
+            config.supabase_url,
+            config.supabase_service_key.get_secret_value(),
+        )
+        trade_repo = TradeRepository(client)
+        lifecycle = TradeLifecycleManager(trade_repo, graph, memory_store)
+        await lifecycle.on_trade(result)
+    except Exception:
+        logger.warning("Trade lifecycle processing failed", exc_info=True)
 
 
 def _setup_logging(level: str = "INFO") -> None:

@@ -60,5 +60,27 @@ class SkopaqConfig(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # ── Reflection / Memory ─────────────────────────────────────────────
+    reflection_enabled: bool = True
+    reflection_max_memory_entries: int = 50
+
+    # ── Upstream Agent Tuning ─────────────────────────────────────────
+    max_debate_rounds: int = 1
+    max_risk_discuss_rounds: int = 1
+    selected_analysts: str = "market,social,news,fundamentals"
+    google_thinking_level: str = ""
+
+    # ── Risk-Adjusted Position Sizing ─────────────────────────────────
+    position_sizing_enabled: bool = True
+    risk_per_trade_pct: float = 0.01     # 1% of equity per trade
+    atr_multiplier: float = 2.0          # Stop distance in ATR units
+    atr_period: int = 14                 # ATR lookback period
+
+    # ── Sector Concentration ──────────────────────────────────────────
+    max_sector_concentration_pct: float = 0.40  # Max 40% in any one sector
+
+    # ── Regime Detection ──────────────────────────────────────────────
+    regime_detection_enabled: bool = False  # Off until tested with live data
+
     # ── Logging ─────────────────────────────────────────────────────────
     log_level: str = "INFO"
