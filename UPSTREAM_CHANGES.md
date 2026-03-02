@@ -55,3 +55,40 @@ Documents all modifications made to files under `tradingagents/` (vendored from 
 **Why:** INDstocks is the primary data source for Indian equities. Position as first vendor gives it priority in the fallback chain.
 
 **Backward compatible:** Yes — other vendors still present as fallbacks. If INDstocks token is missing, `route_to_vendor()` falls through to yfinance/alpha_vantage.
+
+---
+
+### Phase 2.5: Paper Trading Enablement
+
+#### 5. `tradingagents/agents/utils/technical_indicators_tools.py` — Handle comma-separated indicators
+
+**What:** Modified `get_indicators()` to split comma-separated indicator strings and fetch each separately.
+
+**Why:** LLMs (Gemini 3 Flash) sometimes batch multiple indicators into a single tool call: `"close_50_sma,close_200_sma,rsi,macd"`. The original code passed this as-is, causing `ValueError: Indicator ... is not supported`.
+
+**Lines changed:** Added ~10 lines of splitting/combining logic after the docstring.
+
+**Backward compatible:** Yes — single indicators work unchanged. Comma-separated strings are transparently split and results combined.
+
+---
+
+#### 6. `tradingagents/dataflows/interface.py` — yfinance symbol suffix for non-US markets
+
+**What:**
+- Added `_SYMBOL_ARG_METHODS` frozenset listing methods where first arg is a symbol
+- Added `_apply_yfinance_suffix()` helper that appends a configurable suffix (e.g., `.NS`)
+- Modified `route_to_vendor()` to call `_apply_yfinance_suffix()` when routing to yfinance
+
+**Why:** yfinance requires exchange suffixes for non-US markets (e.g., `RELIANCE.NS` for NSE India). Upstream passes bare symbols. Rather than modifying every yfinance function, the suffix is applied at the routing layer.
+
+**Backward compatible:** Yes — suffix defaults to empty string (`""`) in `DEFAULT_CONFIG`, so no change for US markets.
+
+---
+
+#### 7. `tradingagents/default_config.py` — Added yfinance_symbol_suffix config key
+
+**What:** Added `"yfinance_symbol_suffix": ""` to `DEFAULT_CONFIG`.
+
+**Why:** Configurable per deployment — set to `.NS` for India, `.L` for London, etc.
+
+**Backward compatible:** Yes — defaults to empty string (no suffix).

@@ -20,4 +20,17 @@ def get_indicators(
     Returns:
         str: A formatted dataframe containing the technical indicators for the specified ticker symbol and indicator.
     """
-    return route_to_vendor("get_indicators", symbol, indicator, curr_date, look_back_days)
+    # LLMs sometimes pass comma-separated indicators; handle gracefully
+    indicators = [ind.strip() for ind in indicator.split(",") if ind.strip()]
+    if len(indicators) <= 1:
+        return route_to_vendor("get_indicators", symbol, indicator.strip(), curr_date, look_back_days)
+
+    # Multiple indicators requested — fetch each and combine
+    parts = []
+    for ind in indicators:
+        try:
+            result = route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days)
+            parts.append(f"=== {ind} ===\n{result}")
+        except Exception as e:
+            parts.append(f"=== {ind} ===\nError: {e}")
+    return "\n\n".join(parts)

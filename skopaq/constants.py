@@ -56,6 +56,13 @@ class SafetyRules:
 # Singleton — import this, don't create new instances
 SAFETY_RULES = SafetyRules()
 
+# Paper-mode variant — relaxes timing and stop-loss so we can test anytime.
+# Capital protection limits remain fully enforced even in paper mode.
+PAPER_SAFETY_RULES = SafetyRules(
+    market_hours_only=False,      # Allow trades outside market hours
+    require_stop_loss=False,      # Upstream agents don't always set stop-loss
+)
+
 
 # ── Market Hours (IST) ──────────────────────────────────────────────────────
 

@@ -111,6 +111,8 @@ def status() -> None:
         llms.append("Perplexity")
     if config.xai_api_key.get_secret_value():
         llms.append("Grok")
+    if config.openrouter_api_key.get_secret_value():
+        llms.append("OpenRouter")
 
     display_welcome()
     display_status(__version__, config, health, llms)
@@ -186,23 +188,74 @@ def trade(
 
 
 async def _run_trade(symbol: str, trade_date: str):
-    """Helper to run async trade."""
+    """Helper to run async trade.
+
+    For paper mode, this function:
+        1. Uses relaxed safety rules (no market-hours or stop-loss gate).
+        2. Fetches a real-time quote from INDstocks and injects it into the
+           paper engine so ``execute_order()`` can simulate a fill.
+    """
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.paper_engine import PaperEngine
+    from skopaq.broker.scrip_resolver import resolve_scrip_code
+    from skopaq.broker.token_manager import TokenManager
     from skopaq.config import SkopaqConfig
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
+    from skopaq.constants import PAPER_SAFETY_RULES, SAFETY_RULES
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.safety_checker import SafetyChecker
-    from skopaq.broker.paper_engine import PaperEngine
+    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
 
     config = SkopaqConfig()
     paper = PaperEngine(initial_capital=config.initial_paper_capital)
+
+    # Choose safety rules based on trading mode
+    rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+
     router = OrderRouter(config, paper)
-    safety = SafetyChecker()
+    safety = SafetyChecker(rules=rules)
     executor = Executor(router, safety)
+
+    # For paper mode, fetch a real-time quote and inject into paper engine
+    # so the fill simulation has a price to work with.
+    if config.trading_mode == "paper":
+        await _inject_paper_quote(config, paper, symbol)
 
     upstream_config = _build_upstream_config(config)
     graph = SkopaqTradingGraph(upstream_config, executor)
     return await graph.analyze_and_execute(symbol, trade_date)
+
+
+async def _inject_paper_quote(config, paper, symbol: str) -> None:
+    """Fetch a real quote from INDstocks and inject it into the paper engine.
+
+    The paper engine requires a Quote in its ``_quotes`` cache before
+    ``execute_order()`` can simulate a fill.  Without this, it returns
+    "No quote available for {symbol}".
+    """
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.scrip_resolver import resolve_scrip_code
+    from skopaq.broker.token_manager import TokenManager
+
+    token_mgr = TokenManager()
+    client = INDstocksClient(config, token_mgr)
+
+    try:
+        async with client:
+            scrip_code = await resolve_scrip_code(client, symbol)
+            logger.info("Resolved %s → %s", symbol, scrip_code)
+
+            quote = await client.get_quote(scrip_code, symbol=symbol)
+            paper.update_quote(quote)
+            logger.info(
+                "Injected quote: %s LTP=%.2f bid=%.2f ask=%.2f",
+                symbol, quote.ltp, quote.bid, quote.ask,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch quote for %s — paper fill may fail: %s",
+            symbol, exc,
+        )
 
 
 # ── Scan ──────────────────────────────────────────────────────────────────────
@@ -285,6 +338,14 @@ def _build_upstream_config(config) -> dict:
         "max_debate_rounds": 1,
         "max_risk_discuss_rounds": 1,
         "max_recur_limit": 100,
+        # Indian market data vendor routing
+        "data_vendors": {
+            "core_stock_apis": "indstocks",       # INDstocks for OHLCV (native NSE)
+            "technical_indicators": "yfinance",   # yfinance + .NS suffix
+            "fundamental_data": "yfinance",       # yfinance + .NS suffix
+            "news_data": "yfinance",              # yfinance + .NS suffix
+        },
+        "yfinance_symbol_suffix": ".NS",          # NSE suffix for yfinance calls
     }
 
     # Build per-role LLM map (multi-model tiering)

@@ -5,7 +5,8 @@ The upstream TradingAgentsGraph uses a single provider with two LLMs
 
     market_analyst      → Gemini 3 Flash   (cheap, fast)
     social_analyst      → Grok             (Twitter/X integration)
-    news_analyst        → Perplexity Sonar (web-grounded)
+    news_analyst        → Gemini 3 Flash   (tool-calling required; Perplexity
+                                            Sonar doesn't support tool use)
     fundamentals_analyst→ Gemini 3 Flash   (cheap, fast)
     bull_researcher     → Gemini 3 Flash
     bear_researcher     → Gemini 3 Flash
@@ -16,6 +17,9 @@ The upstream TradingAgentsGraph uses a single provider with two LLMs
     neutral_debator     → Gemini 3 Flash
     conservative_debator→ Gemini 3 Flash
     _default            → Gemini 3 Flash   (fallback for any unlisted role)
+
+Note: Perplexity Sonar is used for the scanner's news screener (plain
+prompts), NOT for the news_analyst agent (which needs tool calling).
 
 Each role gracefully falls back to Gemini Flash if its preferred
 provider key is missing.
@@ -35,7 +39,9 @@ logger = logging.getLogger(__name__)
 _ROLE_PREFERENCES: dict[str, list[tuple[str, str]]] = {
     "market_analyst":       [("google", "gemini-3-flash-preview")],
     "social_analyst":       [("openrouter", "x-ai/grok-3-mini"), ("xai", "grok-3-mini"), ("google", "gemini-3-flash-preview")],
-    "news_analyst":         [("openrouter", "perplexity/sonar-pro"), ("perplexity", "sonar"), ("google", "gemini-3-flash-preview")],
+    # Perplexity Sonar doesn't support tool calling via OpenRouter (404).
+    # Agent analysts need bind_tools() → must use a tool-capable model.
+    "news_analyst":         [("google", "gemini-3-flash-preview")],
     "fundamentals_analyst": [("google", "gemini-3-flash-preview")],
     "bull_researcher":      [("google", "gemini-3-flash-preview")],
     "bear_researcher":      [("google", "gemini-3-flash-preview")],

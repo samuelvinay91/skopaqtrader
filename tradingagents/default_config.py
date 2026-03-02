@@ -31,4 +31,8 @@ DEFAULT_CONFIG = {
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default
     },
+    # yfinance symbol suffix for non-US markets.
+    # Indian NSE stocks need ".NS" (e.g., RELIANCE → RELIANCE.NS).
+    # Leave empty for US markets.
+    "yfinance_symbol_suffix": "",
 }

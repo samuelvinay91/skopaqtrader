@@ -45,9 +45,10 @@ class TestBuildLlmMap:
             llm_map = build_llm_map()
 
         # With all keys available, roles get their FIRST preference:
-        # social_analyst → openrouter (first in list), news_analyst → openrouter
+        # social_analyst → openrouter (Grok), news_analyst → google (Gemini;
+        # Perplexity Sonar doesn't support tool calling via OpenRouter)
         assert llm_map["social_analyst"]._provider == "openrouter"
-        assert llm_map["news_analyst"]._provider == "openrouter"
+        assert llm_map["news_analyst"]._provider == "google"
         assert llm_map["research_manager"]._provider == "anthropic"
         assert llm_map["risk_manager"]._provider == "anthropic"
         assert llm_map["market_analyst"]._provider == "google"

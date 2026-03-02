@@ -157,9 +157,41 @@ def route_to_vendor(method: str, *args, **kwargs):
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
+        # Apply yfinance symbol suffix for non-US markets (e.g., .NS for NSE)
+        call_args = _apply_yfinance_suffix(args, method) if vendor == "yfinance" else args
+
         try:
-            return impl_func(*args, **kwargs)
+            return impl_func(*call_args, **kwargs)
         except AlphaVantageRateLimitError:
             continue  # Only rate limits trigger fallback
 
     raise RuntimeError(f"No available vendor for '{method}'")
+
+
+# Methods where the first positional argument is a stock symbol.
+# get_global_news is excluded because its first arg is curr_date.
+_SYMBOL_ARG_METHODS = frozenset({
+    "get_stock_data", "get_indicators", "get_fundamentals",
+    "get_balance_sheet", "get_cashflow", "get_income_statement",
+    "get_news", "get_insider_transactions",
+})
+
+
+def _apply_yfinance_suffix(args: tuple, method: str) -> tuple:
+    """Append the configured yfinance symbol suffix to the symbol argument.
+
+    Indian NSE stocks require a ``.NS`` suffix for yfinance to recognise them
+    (e.g., ``RELIANCE`` → ``RELIANCE.NS``).  The suffix is read from the
+    ``yfinance_symbol_suffix`` config key (empty string = no change).
+    """
+    config = get_config()
+    suffix = config.get("yfinance_symbol_suffix", "")
+
+    if not suffix or not args or method not in _SYMBOL_ARG_METHODS:
+        return args
+
+    symbol = args[0]
+    if isinstance(symbol, str) and not symbol.upper().endswith(suffix.upper()):
+        return (symbol + suffix,) + args[1:]
+
+    return args
