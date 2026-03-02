@@ -226,8 +226,8 @@ def display_analyze_result(result: AnalysisResult) -> None:
 
     # ── Reasoning ──
     if signal.reasoning:
-        reasoning_text = signal.reasoning[:500]
-        if len(signal.reasoning) > 500:
+        reasoning_text = signal.reasoning[:2000]
+        if len(signal.reasoning) > 2000:
             reasoning_text += "..."
         console.print(
             Panel(

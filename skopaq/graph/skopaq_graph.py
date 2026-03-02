@@ -213,6 +213,11 @@ class SkopaqTradingGraph:
         The upstream ``propagate()`` returns a (state, decision) tuple where
         ``decision`` is a processed signal string like "BUY" / "SELL" / "HOLD",
         and ``state`` is a dict with all intermediate analysis.
+
+        Reasoning is extracted from (in priority order):
+        1. ``risk_debate_state.judge_decision`` — the risk manager's verdict
+        2. ``final_trade_decision`` — the full unprocessed report
+        3. The raw decision string (fallback, usually just one word)
         """
         if decision is None:
             return None
@@ -229,18 +234,30 @@ class SkopaqTradingGraph:
 
         # Try to extract confidence from state
         confidence = 50
+        reasoning = decision_str[:500]
+
         if isinstance(state, dict):
             # The risk management node may include a confidence indicator
             risk_state = state.get("risk_debate_state", {})
             if isinstance(risk_state, dict):
                 confidence = _extract_confidence(risk_state)
+                # Judge decision has the richest reasoning
+                judge = risk_state.get("judge_decision", "")
+                if judge and len(str(judge).strip()) > len(action):
+                    reasoning = str(judge).strip()[:2000]
+
+            # Fall back to the full unprocessed trade decision
+            if reasoning == decision_str[:500]:
+                full_decision = state.get("final_trade_decision", "")
+                if full_decision and len(str(full_decision).strip()) > len(action):
+                    reasoning = str(full_decision).strip()[:2000]
 
         return TradingSignal(
             symbol=symbol,
             exchange=Exchange.NSE,
             action=action,
             confidence=confidence,
-            reasoning=decision_str[:500],
+            reasoning=reasoning,
             agent_state=state if isinstance(state, dict) else {},
         )
 
