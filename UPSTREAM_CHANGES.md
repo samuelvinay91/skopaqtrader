@@ -95,6 +95,47 @@ Documents all modifications made to files under `tradingagents/` (vendored from 
 
 ---
 
+### Performance: Parallel Analyst Execution
+
+#### 9. `tradingagents/agents/utils/agent_states.py` — State reducers for parallel fan-out
+
+**What:** Replaced string-annotation `Annotated[Type, "description"]` with reducer-annotation `Annotated[Type, reducer_fn]` on all `AgentState` fields (except `messages` which already has `add_messages`).
+
+Added three reducer functions:
+- `_last_str(a, b)` — keeps latest non-empty string
+- `_last_invest_state(a, b)` — keeps `InvestDebateState` with higher count
+- `_last_risk_state(a, b)` — keeps `RiskDebateState` with higher count
+
+**Why:** LangGraph's default `LastValue` channel throws `InvalidUpdateError` when multiple parallel branches converge (fan-in). Custom reducers enable safe state merging during parallel analyst execution.
+
+**Backward compatible:** Yes — reducers are semantically identical to `LastValue` for sequential execution. Only takes effect when parallel branches merge.
+
+---
+
+#### 10. `tradingagents/graph/setup.py` — Parallel analyst fan-out/fan-in
+
+**What:**
+- Changed graph wiring from sequential analyst chain to parallel fan-out: `START → [all analysts simultaneously]`
+- Replaced per-analyst `Msg Clear` nodes with no-op `_analyst_done` pass-throughs
+- Added single `"Clear Analyst Messages"` node after the fan-in point
+- Fan-in: all `Done *` nodes → `Clear Analyst Messages` → `Bull Researcher`
+
+**Why:** All 4 analysts are completely independent (separate tools, separate state fields). Running them in parallel saves time proportional to the non-longest analyst phase. Measured ~18% improvement (4m 46s → 3m 55s).
+
+**Backward compatible:** Yes — same graph semantics, same outputs. Analysts just run concurrently.
+
+---
+
+#### 11. `tradingagents/graph/conditional_logic.py` — Done node routing
+
+**What:** Changed `should_continue_*` return values from `"Msg Clear X"` to `"Done X"` to match the new no-op Done nodes.
+
+**Why:** Per-analyst `Msg Clear` nodes were replaced with `Done *` pass-throughs to avoid `RemoveMessage` conflicts during parallel execution (multiple branches trying to delete the same initial message ID).
+
+**Backward compatible:** Yes — no semantic change. Just different node names in the graph.
+
+---
+
 ### Bugfix: Symbol suffix stripping
 
 #### 8. `tradingagents/dataflows/indstocks.py` — Strip `.NS`/`.BO` suffixes
