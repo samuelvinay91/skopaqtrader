@@ -20,6 +20,22 @@ from datetime import datetime, timezone
 import typer
 
 from skopaq import __version__
+from skopaq.cli.display import (
+    display_analyze_result,
+    display_analyze_start,
+    display_error,
+    display_scan_results,
+    display_scan_start,
+    display_serve_banner,
+    display_status,
+    display_success,
+    display_token_health,
+    display_token_set,
+    display_trade_result,
+    display_trade_start,
+    display_version,
+    display_welcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +62,7 @@ def token_set(
     mgr = TokenManager()
     mgr.set_token(token, ttl_hours=ttl)
     health = mgr.get_health()
-    typer.echo(f"Token stored. Expires at {health.expires_at} ({health.remaining} remaining)")
+    display_token_set(health)
 
 
 @token_app.command("status")
@@ -56,15 +72,9 @@ def token_status() -> None:
 
     mgr = TokenManager()
     health = mgr.get_health()
+    display_token_health(health)
 
-    if health.valid:
-        typer.echo(f"Token: VALID")
-        typer.echo(f"Expires: {health.expires_at}")
-        typer.echo(f"Remaining: {health.remaining}")
-        if health.warning:
-            typer.secho(f"Warning: {health.warning}", fg=typer.colors.YELLOW)
-    else:
-        typer.secho(f"Token: INVALID — {health.warning}", fg=typer.colors.RED)
+    if not health.valid:
         raise typer.Exit(code=1)
 
 
@@ -75,7 +85,7 @@ def token_clear() -> None:
 
     mgr = TokenManager()
     mgr.clear()
-    typer.echo("Token cleared.")
+    display_success("Token cleared")
 
 
 # ── Status ───────────────────────────────────────────────────────────────────
@@ -91,24 +101,7 @@ def status() -> None:
     mgr = TokenManager()
     health = mgr.get_health()
 
-    typer.echo(f"SkopaqTrader v{__version__}")
-    typer.echo(f"─────────────────────────────")
-    typer.echo(f"Mode:      {config.trading_mode.upper()}")
-    typer.echo(f"Broker:    INDstocks ({config.indstocks_base_url})")
-
-    # Token
-    if health.valid:
-        typer.echo(f"Token:     VALID ({health.remaining} remaining)")
-    else:
-        typer.secho(f"Token:     INVALID — {health.warning}", fg=typer.colors.RED)
-
-    # Supabase
-    if config.supabase_url:
-        typer.echo(f"Supabase:  configured")
-    else:
-        typer.secho(f"Supabase:  NOT configured", fg=typer.colors.YELLOW)
-
-    # LLMs
+    # Detect configured LLMs
     llms = []
     if config.google_api_key.get_secret_value():
         llms.append("Gemini")
@@ -118,13 +111,9 @@ def status() -> None:
         llms.append("Perplexity")
     if config.xai_api_key.get_secret_value():
         llms.append("Grok")
-    typer.echo(f"LLMs:      {', '.join(llms) if llms else 'NONE configured'}")
 
-    # Redis
-    if config.upstash_redis_url:
-        typer.echo(f"Redis:     configured (Upstash)")
-    else:
-        typer.secho(f"Redis:     NOT configured", fg=typer.colors.YELLOW)
+    display_welcome()
+    display_status(__version__, config, health, llms)
 
 
 # ── Analyze ──────────────────────────────────────────────────────────────────
@@ -139,26 +128,14 @@ def analyze(
     if not date:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    typer.echo(f"Analyzing {symbol} for {date}...")
+    display_analyze_start(symbol, date)
     result = asyncio.run(_run_analyze(symbol, date))
 
     if result.error:
-        typer.secho(f"Error: {result.error}", fg=typer.colors.RED)
+        display_error(result.error)
         raise typer.Exit(code=1)
 
-    if result.signal:
-        typer.echo(f"Signal: {result.signal.action} (confidence={result.signal.confidence}%)")
-        if result.signal.entry_price:
-            typer.echo(f"Entry:  {result.signal.entry_price}")
-        if result.signal.stop_loss:
-            typer.echo(f"SL:     {result.signal.stop_loss}")
-        if result.signal.target:
-            typer.echo(f"Target: {result.signal.target}")
-        typer.echo(f"Reason: {result.signal.reasoning[:200]}")
-    else:
-        typer.echo("No signal generated.")
-
-    typer.echo(f"Duration: {result.duration_seconds}s")
+    display_analyze_result(result)
 
 
 async def _run_analyze(symbol: str, trade_date: str):
@@ -197,31 +174,15 @@ def trade(
 
     from skopaq.config import SkopaqConfig
     config = SkopaqConfig()
-    typer.echo(f"Trading {symbol} for {date} (mode={config.trading_mode})...")
 
+    display_trade_start(symbol, date, config.trading_mode)
     result = asyncio.run(_run_trade(symbol, date))
 
     if result.error:
-        typer.secho(f"Error: {result.error}", fg=typer.colors.RED)
+        display_error(result.error)
         raise typer.Exit(code=1)
 
-    if result.signal:
-        typer.echo(f"Signal: {result.signal.action} (confidence={result.signal.confidence}%)")
-
-    if result.execution:
-        ex = result.execution
-        if ex.success:
-            typer.secho(
-                f"Executed: {ex.mode} fill @ {ex.fill_price} "
-                f"(slippage={ex.slippage}, brokerage={ex.brokerage})",
-                fg=typer.colors.GREEN,
-            )
-        else:
-            typer.secho(f"Rejected: {ex.rejection_reason}", fg=typer.colors.RED)
-    else:
-        typer.echo("No execution (HOLD or no signal).")
-
-    typer.echo(f"Duration: {result.duration_seconds}s")
+    display_trade_result(result)
 
 
 async def _run_trade(symbol: str, trade_date: str):
@@ -252,18 +213,9 @@ def scan(
     max_candidates: int = typer.Option(5, help="Max candidates to return."),
 ) -> None:
     """Run a single scanner cycle on the NIFTY 50 watchlist."""
-    typer.echo("Running scanner cycle...")
+    display_scan_start()
     candidates = asyncio.run(_run_scan(max_candidates))
-
-    if not candidates:
-        typer.echo("No candidates found.")
-        return
-
-    for c in candidates:
-        urgency_marker = " [HIGH]" if c.urgency == "high" else ""
-        typer.echo(f"  {c.symbol}{urgency_marker}: {c.reason}")
-
-    typer.echo(f"\n{len(candidates)} candidate(s) found.")
+    display_scan_results(candidates)
 
 
 async def _run_scan(max_candidates: int):
@@ -291,7 +243,7 @@ def serve(
     """Start the FastAPI backend server."""
     import uvicorn
 
-    typer.echo(f"Starting SkopaqTrader API on {host}:{port}")
+    display_serve_banner(host, port)
     uvicorn.run(
         "skopaq.api.server:app",
         host=host,
@@ -307,7 +259,7 @@ def serve(
 @app.command("version")
 def version() -> None:
     """Print version."""
-    typer.echo(f"SkopaqTrader v{__version__}")
+    display_version(__version__)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
