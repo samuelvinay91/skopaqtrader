@@ -56,6 +56,18 @@ def _get_client():
     return INDstocksClient(config, token_mgr)
 
 
+def _normalize_symbol(symbol: str) -> str:
+    """Strip exchange suffixes that LLM agents may attach (e.g., .NS, .BO).
+
+    Upstream agents were trained on Yahoo Finance conventions where Indian
+    stocks use ``RELIANCE.NS``.  INDstocks expects bare ``RELIANCE``.
+    """
+    for suffix in (".NS", ".BO"):
+        if symbol.upper().endswith(suffix):
+            return symbol[: -len(suffix)]
+    return symbol
+
+
 async def _resolve_scrip_code(symbol: str, exchange: str = "NSE") -> str:
     """Resolve a human-readable symbol to a scrip-code for historical API.
 
@@ -65,6 +77,8 @@ async def _resolve_scrip_code(symbol: str, exchange: str = "NSE") -> str:
     Returns format: ``NSE_3045``
     """
     import time
+
+    symbol = _normalize_symbol(symbol)
 
     global _instrument_cache, _instrument_cache_ts
 

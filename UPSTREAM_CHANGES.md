@@ -92,3 +92,15 @@ Documents all modifications made to files under `tradingagents/` (vendored from 
 **Why:** Configurable per deployment — set to `.NS` for India, `.L` for London, etc.
 
 **Backward compatible:** Yes — defaults to empty string (no suffix).
+
+---
+
+### Bugfix: Symbol suffix stripping
+
+#### 8. `tradingagents/dataflows/indstocks.py` — Strip `.NS`/`.BO` suffixes
+
+**What:** Added `_normalize_symbol()` helper and call it at the top of `_resolve_scrip_code()`.
+
+**Why:** LLM agents (trained on Yahoo Finance conventions) often generate `RELIANCE.NS` instead of bare `RELIANCE`. The yfinance suffix logic in `interface.py` only *adds* `.NS` for the yfinance vendor — it doesn't *remove* it for INDstocks. This caused `ValueError: Symbol 'RELIANCE.NS' not found in NSE instruments`.
+
+**Backward compatible:** Yes — bare symbols pass through unchanged.
