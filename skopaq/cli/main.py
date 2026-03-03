@@ -160,6 +160,14 @@ async def _run_analyze(symbol: str, trade_date: str):
     # Build upstream config (uses upstream defaults + our keys)
     upstream_config = _build_upstream_config(config)
 
+    # For crypto, translate BTCUSDT → BTC-USD for yfinance-based analysis
+    if config.asset_class == "crypto":
+        from skopaq.broker.crypto_symbols import to_yfinance_ticker
+        analysis_symbol = to_yfinance_ticker(symbol)
+        logger.info("Crypto: %s → analysis as %s", symbol, analysis_symbol)
+    else:
+        analysis_symbol = symbol
+
     # Load persisted memories so agents have context from past trades
     memory_store = _create_memory_store(config)
 
@@ -169,7 +177,7 @@ async def _run_analyze(symbol: str, trade_date: str):
         selected_analysts=analysts,
         memory_store=memory_store,
     )
-    return await graph.analyze(symbol, trade_date)
+    return await graph.analyze(analysis_symbol, trade_date)
 
 
 # ── Trade ────────────────────────────────────────────────────────────────────
@@ -208,7 +216,10 @@ async def _run_trade(symbol: str, trade_date: str):
     """
     from skopaq.broker.paper_engine import PaperEngine
     from skopaq.config import SkopaqConfig
-    from skopaq.constants import PAPER_SAFETY_RULES, SAFETY_RULES
+    from skopaq.constants import (
+        CRYPTO_PAPER_SAFETY_RULES, CRYPTO_SAFETY_RULES,
+        PAPER_SAFETY_RULES, SAFETY_RULES,
+    )
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.safety_checker import SafetyChecker
@@ -217,10 +228,23 @@ async def _run_trade(symbol: str, trade_date: str):
     from skopaq.risk.position_sizer import PositionSizer
 
     config = SkopaqConfig()
-    paper = PaperEngine(initial_capital=config.initial_paper_capital)
+    is_crypto = config.asset_class == "crypto"
 
-    # Choose safety rules based on trading mode
-    rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+    # Paper engine — crypto uses % brokerage + USDT capital
+    if is_crypto:
+        paper = PaperEngine(
+            initial_capital=config.initial_paper_capital,
+            brokerage_pct=0.001,         # 0.1% Binance spot fee
+            currency_label="USDT",
+        )
+    else:
+        paper = PaperEngine(initial_capital=config.initial_paper_capital)
+
+    # Choose safety rules based on trading mode + asset class
+    if is_crypto:
+        rules = CRYPTO_PAPER_SAFETY_RULES if config.trading_mode == "paper" else CRYPTO_SAFETY_RULES
+    else:
+        rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
 
     router = OrderRouter(config, paper)
     safety = SafetyChecker(
@@ -228,7 +252,7 @@ async def _run_trade(symbol: str, trade_date: str):
         max_sector_concentration_pct=config.max_sector_concentration_pct,
     )
 
-    # ATR-based position sizer (optional)
+    # ATR-based position sizer (optional — also works for crypto via yfinance)
     sizer = None
     if config.position_sizing_enabled:
         sizer = PositionSizer(
@@ -239,15 +263,31 @@ async def _run_trade(symbol: str, trade_date: str):
 
     executor = Executor(router, safety, position_sizer=sizer)
 
-    # For paper mode, fetch a real-time quote and inject into paper engine
-    # so the fill simulation has a price to work with.
+    # For paper mode, inject a real-time quote so the fill simulation has a price.
     if config.trading_mode == "paper":
-        await _inject_paper_quote(config, paper, symbol)
+        if is_crypto:
+            await _inject_crypto_quote(config, paper, symbol)
+        else:
+            await _inject_paper_quote(config, paper, symbol)
 
     # Compute regime and calendar scales for position sizing
-    regime_scale, calendar_scale = _compute_risk_scales(config, trade_date)
+    # (India VIX + NSE calendar are irrelevant for crypto — skip)
+    if is_crypto:
+        regime_scale, calendar_scale = 1.0, 1.0
+    else:
+        regime_scale, calendar_scale = _compute_risk_scales(config, trade_date)
 
     upstream_config = _build_upstream_config(config)
+
+    # For crypto, translate BTCUSDT → BTC-USD for yfinance-based analysis
+    if is_crypto:
+        from skopaq.broker.crypto_symbols import to_yfinance_ticker
+        analysis_symbol = to_yfinance_ticker(symbol)
+        # Store the original Binance symbol for trade record building
+        upstream_config["_trade_symbol"] = symbol
+        logger.info("Crypto: %s → analysis as %s", symbol, analysis_symbol)
+    else:
+        analysis_symbol = symbol
 
     # Load persisted memories + wire lifecycle manager
     memory_store = _create_memory_store(config)
@@ -259,7 +299,7 @@ async def _run_trade(symbol: str, trade_date: str):
     )
 
     result = await graph.analyze_and_execute(
-        symbol, trade_date,
+        analysis_symbol, trade_date,
         regime_scale=regime_scale,
         calendar_scale=calendar_scale,
     )
@@ -303,6 +343,34 @@ async def _inject_paper_quote(config, paper, symbol: str) -> None:
         )
 
 
+async def _inject_crypto_quote(config, paper, symbol: str) -> None:
+    """Fetch a real quote from Binance and inject it into the paper engine.
+
+    The paper engine requires a Quote in its ``_quotes`` cache before
+    ``execute_order()`` can simulate a fill.  Uses the Binance public
+    24hr ticker endpoint (no authentication needed).
+    """
+    from skopaq.broker.binance_client import BinanceClient
+    from skopaq.broker.crypto_symbols import to_binance_pair
+
+    pair = to_binance_pair(symbol)
+    client = BinanceClient(base_url=config.binance_base_url)
+
+    try:
+        async with client:
+            quote = await client.get_quote(pair)
+            paper.update_quote(quote)
+            logger.info(
+                "Injected crypto quote: %s LTP=%.2f bid=%.2f ask=%.2f",
+                pair, quote.ltp, quote.bid, quote.ask,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch crypto quote for %s — paper fill may fail: %s",
+            pair, exc,
+        )
+
+
 # ── Scan ──────────────────────────────────────────────────────────────────────
 
 
@@ -322,8 +390,16 @@ async def _run_scan(max_candidates: int):
     from skopaq.scanner import ScannerEngine, Watchlist
 
     config = SkopaqConfig()
+
+    # Crypto mode uses CRYPTO_TOP_20 watchlist instead of NIFTY_50
+    if config.asset_class == "crypto":
+        from skopaq.broker.crypto_symbols import CRYPTO_TOP_20
+        watchlist = Watchlist(symbols=CRYPTO_TOP_20)
+    else:
+        watchlist = Watchlist()
+
     scanner = ScannerEngine(
-        watchlist=Watchlist(),
+        watchlist=watchlist,
         max_candidates=max_candidates,
     )
     return await scanner.scan_once()
@@ -421,6 +497,8 @@ def _build_upstream_config(config) -> dict:
     bridge_env_vars(config)
 
     project_dir = str(Path.cwd())
+    is_crypto = config.asset_class == "crypto"
+
     upstream = {
         "project_dir": project_dir,
         "results_dir": str(Path(project_dir) / "results"),
@@ -433,14 +511,16 @@ def _build_upstream_config(config) -> dict:
         "max_risk_discuss_rounds": config.max_risk_discuss_rounds,
         "google_thinking_level": config.google_thinking_level or None,
         "max_recur_limit": 100,
-        # Indian market data vendor routing
+        "asset_class": config.asset_class,
+        # Data vendor routing — crypto uses yfinance everywhere (no INDstocks)
         "data_vendors": {
-            "core_stock_apis": "indstocks",       # INDstocks for OHLCV (native NSE)
-            "technical_indicators": "yfinance",   # yfinance + .NS suffix
-            "fundamental_data": "yfinance",       # yfinance + .NS suffix
-            "news_data": "yfinance",              # yfinance + .NS suffix
+            "core_stock_apis": "yfinance" if is_crypto else "indstocks",
+            "technical_indicators": "yfinance",
+            "fundamental_data": "yfinance",
+            "news_data": "yfinance",
         },
-        "yfinance_symbol_suffix": ".NS",          # NSE suffix for yfinance calls
+        # Crypto: no suffix (BTC-USD works as-is); Equity: .NS for NSE
+        "yfinance_symbol_suffix": "" if is_crypto else ".NS",
     }
 
     # Build per-role LLM map (multi-model tiering)
@@ -563,10 +643,20 @@ def _build_trade_record(result, config):
     if result.duration_seconds:
         model_signals["duration_seconds"] = result.duration_seconds
 
+    # Determine exchange and product based on asset class
+    is_crypto = config.asset_class == "crypto"
+    trade_symbol = result.symbol
+    if is_crypto:
+        # result.symbol may be the yfinance format (BTC-USD); restore Binance pair
+        from skopaq.broker.crypto_symbols import to_binance_pair
+        trade_symbol = to_binance_pair(result.symbol, config.crypto_quote_currency)
+
     return TradeRecord(
-        symbol=result.symbol,
+        symbol=trade_symbol,
+        exchange="BINANCE" if is_crypto else "NSE",
+        product="SPOT" if is_crypto else "CNC",
         side=result.signal.action,
-        quantity=result.signal.quantity or 1,
+        quantity=result.signal.quantity or Decimal("1"),
         price=(
             Decimal(str(result.signal.entry_price))
             if result.signal.entry_price else None

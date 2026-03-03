@@ -130,7 +130,7 @@ class ConcentrationChecker:
         sector_exposure = 0.0
         for pos in positions:
             if pos.quantity > 0 and get_sector(pos.symbol) == target_sector:
-                sector_exposure += pos.last_price * pos.quantity
+                sector_exposure += pos.last_price * float(pos.quantity)
 
         # Add proposed order value
         new_exposure = sector_exposure + order_value

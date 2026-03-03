@@ -63,6 +63,23 @@ PAPER_SAFETY_RULES = SafetyRules(
     require_stop_loss=False,      # Upstream agents don't always set stop-loss
 )
 
+# Crypto live variant — 24/7 trading with tighter position limits
+# (crypto is more volatile than Indian equities).
+CRYPTO_SAFETY_RULES = SafetyRules(
+    market_hours_only=False,       # 24/7 crypto markets
+    require_stop_loss=False,
+    max_position_pct=0.10,         # 10% max per position (vs 15% equity)
+    max_daily_loss_pct=0.05,       # 5% daily loss limit (vs 3% equity)
+    max_order_value_inr=50_000.0,  # Reinterpreted as USDT for crypto
+)
+
+# Crypto paper variant — relaxed for testing.
+CRYPTO_PAPER_SAFETY_RULES = SafetyRules(
+    market_hours_only=False,
+    require_stop_loss=False,
+    max_order_value_inr=50_000.0,
+)
+
 
 # ── Market Hours (IST) ──────────────────────────────────────────────────────
 

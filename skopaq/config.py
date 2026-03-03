@@ -89,5 +89,10 @@ class SkopaqConfig(BaseSettings):
     langcache_cache_id: str = ""
     langcache_threshold: float = 0.90  # Cosine similarity threshold (0–1)
 
+    # ── Asset Class ──────────────────────────────────────────────────────
+    asset_class: Literal["equity", "crypto"] = "equity"
+    crypto_quote_currency: str = "USDT"
+    binance_base_url: str = "https://api.binance.com"
+
     # ── Logging ─────────────────────────────────────────────────────────
     log_level: str = "INFO"

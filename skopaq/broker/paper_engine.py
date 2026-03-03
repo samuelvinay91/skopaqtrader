@@ -53,11 +53,15 @@ class PaperEngine:
         initial_capital: float = 1_000_000.0,
         slippage_pct: float = DEFAULT_SLIPPAGE_PCT,
         brokerage: float = DEFAULT_BROKERAGE_INR,
+        brokerage_pct: float = 0.0,
+        currency_label: str = "INR",
     ) -> None:
         self._initial_capital = Decimal(str(initial_capital))
         self._cash = Decimal(str(initial_capital))
         self._slippage_pct = slippage_pct
         self._brokerage = Decimal(str(brokerage))
+        self._brokerage_pct = Decimal(str(brokerage_pct))
+        self._currency_label = currency_label
 
         # {symbol: Position}
         self._positions: dict[str, Position] = {}
@@ -124,19 +128,28 @@ class PaperEngine:
         # Calculate order value
         order_value = Decimal(str(fill_price)) * order.quantity
 
+        # Compute brokerage: percentage-based (crypto) or flat (equity)
+        if self._brokerage_pct > 0:
+            trade_brokerage = order_value * self._brokerage_pct
+        else:
+            trade_brokerage = self._brokerage
+
         # Check sufficient cash for buys
         if order.side == Side.BUY:
-            total_cost = order_value + self._brokerage
+            total_cost = order_value + trade_brokerage
             if total_cost > self._cash:
                 return ExecutionResult(
                     success=False,
                     mode="paper",
-                    rejection_reason=f"Insufficient funds: need {total_cost}, have {self._cash}",
+                    rejection_reason=(
+                        f"Insufficient funds: need {total_cost} {self._currency_label}, "
+                        f"have {self._cash} {self._currency_label}"
+                    ),
                     signal=signal,
                 )
 
         # Execute the fill
-        self._apply_fill(order, fill_price)
+        self._apply_fill(order, fill_price, trade_brokerage)
 
         # Record the order
         order_resp = OrderResponse(
@@ -150,9 +163,9 @@ class PaperEngine:
 
         actual_slippage = round(fill_price - base_price, 2)
         logger.info(
-            "Paper %s %s x%d @ %.2f (slippage=%.2f, brokerage=%.2f)",
+            "Paper %s %s x%s @ %.2f (slippage=%.2f, brokerage=%.4f %s)",
             order.side, order.symbol, order.quantity, fill_price,
-            actual_slippage, float(self._brokerage),
+            actual_slippage, float(trade_brokerage), self._currency_label,
         )
 
         return ExecutionResult(
@@ -162,7 +175,7 @@ class PaperEngine:
             mode="paper",
             fill_price=fill_price,
             slippage=actual_slippage,
-            brokerage=float(self._brokerage),
+            brokerage=float(trade_brokerage),
             timestamp=datetime.now(timezone.utc),
         )
 
@@ -196,20 +209,22 @@ class PaperEngine:
 
         return None
 
-    def _apply_fill(self, order: OrderRequest, fill_price: float) -> None:
+    def _apply_fill(self, order: OrderRequest, fill_price: float, brokerage: Decimal | None = None) -> None:
         """Update positions and cash after a fill."""
         symbol = order.symbol
         qty = order.quantity
-        value = Decimal(str(fill_price)) * qty
+        price_d = Decimal(str(fill_price))  # Decimal-safe price for all arithmetic
+        value = price_d * qty
+        fee = brokerage if brokerage is not None else self._brokerage
 
         if order.side == Side.BUY:
-            self._cash -= value + self._brokerage
+            self._cash -= value + fee
             existing = self._positions.get(symbol)
             if existing and existing.quantity > 0:
                 # Average up the position
                 total_qty = existing.quantity + qty
                 avg_price = (
-                    (existing.average_price * existing.quantity + fill_price * qty)
+                    (Decimal(str(existing.average_price)) * existing.quantity + price_d * qty)
                     / total_qty
                 )
                 self._positions[symbol] = Position(
@@ -217,7 +232,7 @@ class PaperEngine:
                     exchange=order.exchange,
                     product=order.product,
                     quantity=total_qty,
-                    average_price=round(avg_price, 2),
+                    average_price=float(round(avg_price, 2)),
                     last_price=fill_price,
                     pnl=0.0,
                     day_pnl=0.0,
@@ -237,17 +252,17 @@ class PaperEngine:
                     pnl=0.0,
                     day_pnl=0.0,
                     buy_quantity=qty,
-                    sell_quantity=0,
+                    sell_quantity=Decimal("0"),
                     buy_value=float(value),
                     sell_value=0.0,
                 )
         else:
             # SELL
-            self._cash += value - self._brokerage
+            self._cash += value - fee
             existing = self._positions.get(symbol)
             if existing:
                 remaining = existing.quantity - qty
-                pnl = (fill_price - existing.average_price) * qty
+                pnl = float(price_d - Decimal(str(existing.average_price))) * float(qty)
                 self._day_pnl += Decimal(str(pnl))
 
                 if remaining <= 0:
@@ -277,7 +292,7 @@ class PaperEngine:
         for symbol, pos in self._positions.items():
             quote = self._quotes.get(symbol)
             if quote:
-                pnl = (quote.ltp - pos.average_price) * pos.quantity
+                pnl = (quote.ltp - pos.average_price) * float(pos.quantity)
                 pos = pos.model_copy(update={"last_price": quote.ltp, "pnl": round(pnl, 2)})
             result.append(pos)
         return result

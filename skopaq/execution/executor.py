@@ -122,7 +122,7 @@ class Executor:
             # Approximate P&L from signal entry vs fill
             entry = signal.entry_price or 0
             if entry > 0 and order.quantity:
-                pnl = (result.fill_price - entry) * order.quantity
+                pnl = (result.fill_price - entry) * float(order.quantity)
                 self._safety.record_pnl(pnl)
 
         logger.info(

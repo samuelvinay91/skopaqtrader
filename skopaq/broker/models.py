@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 class Exchange(StrEnum):
     NSE = "NSE"
     BSE = "BSE"
+    BINANCE = "BINANCE"
 
 
 class Segment(StrEnum):
@@ -90,7 +91,7 @@ class OrderRequest(BaseModel):
     exchange: Exchange = Exchange.NSE
     segment: Segment = Segment.EQUITY
     side: Side
-    quantity: int = Field(gt=0)
+    quantity: Decimal = Field(gt=0)
     order_type: OrderType = OrderType.LIMIT
     price: Optional[float] = None       # Limit price
     trigger_price: Optional[float] = None
@@ -144,13 +145,13 @@ class Position(BaseModel):
     symbol: str = ""
     exchange: str = ""
     product: str = ""
-    quantity: int = 0
+    quantity: Decimal = Decimal("0")
     average_price: float = 0.0
     last_price: float = 0.0
     pnl: float = 0.0
     day_pnl: float = 0.0
-    buy_quantity: int = 0
-    sell_quantity: int = 0
+    buy_quantity: Decimal = Decimal("0")
+    sell_quantity: Decimal = Decimal("0")
     buy_value: float = 0.0
     sell_value: float = 0.0
 
@@ -162,7 +163,7 @@ class Holding(BaseModel):
 
     symbol: str = ""
     exchange: str = ""
-    quantity: int = 0
+    quantity: Decimal = Decimal("0")
     average_price: float = 0.0
     last_price: float = 0.0
     pnl: float = 0.0
@@ -292,7 +293,7 @@ class TradingSignal(BaseModel):
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     target: Optional[float] = None
-    quantity: Optional[int] = None
+    quantity: Optional[Decimal] = None
     reasoning: str = ""
     agent_state: dict = Field(default_factory=dict)
 

@@ -23,7 +23,7 @@ class TradeRecord(BaseModel):
     symbol: str
     exchange: str = "NSE"
     side: str
-    quantity: int
+    quantity: Decimal
     price: Optional[Decimal] = None
     order_type: str = "MARKET"
     product: str = "CNC"

@@ -81,7 +81,7 @@ class TestBuildTradeRecord:
     def setup(self):
         self.build = _import_build_trade_record()
         # Minimal config mock
-        self.config = type("Config", (), {})()
+        self.config = type("Config", (), {"asset_class": "equity"})()
 
     def test_buy_creates_valid_record(self):
         """BUY result should produce a valid TradeRecord."""

@@ -141,7 +141,7 @@ class SafetyChecker:
         price = order.price or 0
         if price <= 0:
             return  # Can't check for market orders without a price estimate
-        order_value = price * order.quantity
+        order_value = price * float(order.quantity)
         pct = order_value / portfolio_value
         if pct > self._rules.max_position_pct:
             rejections.append(
@@ -153,7 +153,7 @@ class SafetyChecker:
         price = order.price or 0
         if price <= 0:
             return
-        order_value = price * order.quantity
+        order_value = price * float(order.quantity)
         if order_value > self._rules.max_order_value_inr:
             rejections.append(
                 f"Order value INR {order_value:,.0f} exceeds max INR {self._rules.max_order_value_inr:,.0f}"
@@ -247,7 +247,7 @@ class SafetyChecker:
         price = order.price or 0
         if price <= 0 or portfolio_value <= 0:
             return
-        order_value = price * order.quantity
+        order_value = price * float(order.quantity)
         reason = self._concentration.check(
             symbol=order.symbol,
             order_value=order_value,
@@ -335,7 +335,7 @@ class SafetyChecker:
         price = order.price or 0
         if price <= 0:
             return
-        required = price * order.quantity
+        required = price * float(order.quantity)
         if required > funds.available_margin:
             rejections.append(
                 f"Insufficient margin: need INR {required:,.0f}, available INR {funds.available_margin:,.0f}"
