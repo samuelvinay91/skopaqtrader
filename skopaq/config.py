@@ -82,5 +82,12 @@ class SkopaqConfig(BaseSettings):
     # ── Regime Detection ──────────────────────────────────────────────
     regime_detection_enabled: bool = False  # Off until tested with live data
 
+    # ── Semantic Cache (Redis LangCache) ────────────────────────────────
+    langcache_enabled: bool = False
+    langcache_api_key: SecretStr = SecretStr("")
+    langcache_server_url: str = ""
+    langcache_cache_id: str = ""
+    langcache_threshold: float = 0.90  # Cosine similarity threshold (0–1)
+
     # ── Logging ─────────────────────────────────────────────────────────
     log_level: str = "INFO"

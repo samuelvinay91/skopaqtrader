@@ -1,5 +1,6 @@
-"""LLM utilities — environment bridging and multi-model tiering."""
+"""LLM utilities — environment bridging, multi-model tiering, and caching."""
 
+from skopaq.llm.cache import init_langcache
 from skopaq.llm.env_bridge import bridge_env_vars
 from skopaq.llm.model_tier import build_llm_map
 
@@ -27,4 +28,4 @@ def extract_text(content) -> str:
     return str(content).strip()
 
 
-__all__ = ["bridge_env_vars", "build_llm_map", "extract_text"]
+__all__ = ["bridge_env_vars", "build_llm_map", "extract_text", "init_langcache"]

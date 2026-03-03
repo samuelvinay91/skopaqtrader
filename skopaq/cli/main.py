@@ -449,6 +449,17 @@ def _build_upstream_config(config) -> dict:
     except Exception:
         logger.warning("Failed to build LLM map — falling back to single-model", exc_info=True)
 
+    # Activate semantic LLM cache (Redis LangCache)
+    from skopaq.llm.cache import init_langcache
+    cache = init_langcache(config)
+    if cache:
+        from langchain_core.globals import set_llm_cache
+        set_llm_cache(cache)
+        logger.info(
+            "Semantic cache enabled (threshold=%.2f)",
+            config.langcache_threshold,
+        )
+
     return upstream
 
 

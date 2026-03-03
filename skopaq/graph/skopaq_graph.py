@@ -32,6 +32,8 @@ class AnalysisResult:
     raw_decision: str = ""
     error: Optional[str] = None
     duration_seconds: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -117,6 +119,9 @@ class SkopaqTradingGraph:
             signal = self._parse_signal(symbol, decision, state)
             duration = time.monotonic() - start
 
+            # Read semantic cache stats (if cache is active)
+            cache_hits, cache_misses = self._read_cache_stats()
+
             return AnalysisResult(
                 symbol=symbol,
                 trade_date=trade_date,
@@ -124,6 +129,8 @@ class SkopaqTradingGraph:
                 agent_state=state if isinstance(state, dict) else {},
                 raw_decision=str(decision),
                 duration_seconds=round(duration, 2),
+                cache_hits=cache_hits,
+                cache_misses=cache_misses,
             )
         except Exception as exc:
             duration = time.monotonic() - start
@@ -199,6 +206,28 @@ class SkopaqTradingGraph:
                 logger.info("Agent memories saved to Supabase (%d entries)", saved)
             except Exception:
                 logger.warning("Memory save failed — lessons will be lost on exit", exc_info=True)
+
+    # ── Cache stats ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _read_cache_stats() -> tuple[int, int]:
+        """Read hit/miss counters from the global LLM cache (if active).
+
+        Returns (hits, misses) — both 0 when no cache is configured.
+        """
+        try:
+            from langchain_core.globals import get_llm_cache
+            cache = get_llm_cache()
+            if cache is not None and hasattr(cache, "stats"):
+                stats = cache.stats
+                logger.info(
+                    "Cache: %d hits, %d misses (%.1f%% hit rate, %d errors)",
+                    stats.hits, stats.misses, stats.hit_rate_pct, stats.errors,
+                )
+                return stats.hits, stats.misses
+        except Exception:
+            logger.debug("Could not read cache stats", exc_info=True)
+        return 0, 0
 
     # ── Signal parsing ───────────────────────────────────────────────────
 
