@@ -13,6 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+from uuid import UUID
 
 from skopaq.broker.models import Exchange, ExecutionResult, TradingSignal
 from skopaq.execution.executor import Executor
@@ -34,6 +35,7 @@ class AnalysisResult:
     duration_seconds: float = 0.0
     cache_hits: int = 0
     cache_misses: int = 0
+    trade_id: Optional[UUID] = None  # Set after DB persistence in _run_lifecycle
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

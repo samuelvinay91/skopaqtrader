@@ -492,6 +492,10 @@ def _create_memory_store(config):
 async def _run_lifecycle(config, graph, memory_store, result):
     """Run trade lifecycle tracking (BUY/SELL linkage + auto-reflection).
 
+    Flow:
+        1. Persist the trade to Supabase (so find_open_buy() works for future SELLs)
+        2. Run lifecycle manager (BUY/SELL linkage + reflection)
+
     Silently does nothing if Supabase is not configured.
     """
     if not config.supabase_url or not config.supabase_service_key.get_secret_value():
@@ -507,10 +511,89 @@ async def _run_lifecycle(config, graph, memory_store, result):
             config.supabase_service_key.get_secret_value(),
         )
         trade_repo = TradeRepository(client)
+
+        # Step 1: Persist the trade BEFORE lifecycle processing.
+        # This is the critical link — without it, find_open_buy() never finds
+        # BUYs and the entire self-evolution loop is broken.
+        trade_record = _build_trade_record(result, config)
+        if trade_record is not None:
+            try:
+                saved = trade_repo.insert(trade_record)
+                result.trade_id = saved.id
+                logger.info(
+                    "Trade persisted: %s %s id=%s (paper=%s)",
+                    trade_record.side, trade_record.symbol,
+                    saved.id, trade_record.is_paper,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist trade to Supabase — lifecycle will "
+                    "continue but BUY/SELL linkage may not work",
+                    exc_info=True,
+                )
+
+        # Step 2: Run lifecycle (BUY/SELL linkage + reflection)
         lifecycle = TradeLifecycleManager(trade_repo, graph, memory_store)
         await lifecycle.on_trade(result)
     except Exception:
         logger.warning("Trade lifecycle processing failed", exc_info=True)
+
+
+def _build_trade_record(result, config):
+    """Convert an AnalysisResult into a TradeRecord for Supabase persistence.
+
+    Returns None if the result doesn't represent a successful execution
+    (e.g., HOLD signals, failed orders, or analysis-only runs).
+    """
+    if result.signal is None:
+        return None
+    if result.execution is None or not result.execution.success:
+        return None
+    if result.signal.action == "HOLD":
+        return None
+
+    from decimal import Decimal
+    from skopaq.db.models import TradeRecord
+
+    # Build model_signals dict from cache/timing metadata
+    model_signals = {}
+    if result.cache_hits or result.cache_misses:
+        model_signals["cache_hits"] = result.cache_hits
+        model_signals["cache_misses"] = result.cache_misses
+    if result.duration_seconds:
+        model_signals["duration_seconds"] = result.duration_seconds
+
+    return TradeRecord(
+        symbol=result.symbol,
+        side=result.signal.action,
+        quantity=result.signal.quantity or 1,
+        price=(
+            Decimal(str(result.signal.entry_price))
+            if result.signal.entry_price else None
+        ),
+        fill_price=(
+            Decimal(str(result.execution.fill_price))
+            if result.execution.fill_price else None
+        ),
+        slippage=(
+            Decimal(str(result.execution.slippage))
+            if result.execution.slippage else Decimal("0")
+        ),
+        brokerage=Decimal(str(result.execution.brokerage)),
+        is_paper=(result.execution.mode == "paper"),
+        status="COMPLETE",
+        signal_source="skopaq-ai",
+        consensus_score=result.signal.confidence,
+        entry_reason=(
+            result.signal.reasoning[:2000]
+            if result.signal.reasoning else None
+        ),
+        agent_decision={
+            "action": result.signal.action,
+            "confidence": result.signal.confidence,
+        },
+        model_signals=model_signals,
+    )
 
 
 def _setup_logging(level: str = "INFO") -> None:

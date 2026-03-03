@@ -83,7 +83,7 @@ def _make_buy_result(symbol: str = "RELIANCE") -> AnalysisResult:
 def _make_sell_result(
     symbol: str = "RELIANCE",
     fill_price: float = 2700.0,
-    trade_id: Optional[str] = None,
+    trade_id: Optional[UUID] = None,
 ) -> AnalysisResult:
     """Build an AnalysisResult for a SELL signal."""
     exec_result = ExecutionResult(
@@ -91,9 +91,6 @@ def _make_sell_result(
         fill_price=fill_price,
         mode="paper",
     )
-    # Dynamically add trade_id if provided (not a standard field)
-    if trade_id:
-        exec_result.trade_id = trade_id
 
     return AnalysisResult(
         symbol=symbol,
@@ -106,6 +103,7 @@ def _make_sell_result(
             entry_price=fill_price,
         ),
         execution=exec_result,
+        trade_id=trade_id,  # Set on AnalysisResult (populated by _run_lifecycle)
     )
 
 
@@ -346,6 +344,84 @@ class TestHandleSell:
         reflect_arg = graph.reflect.call_args[0][0]
         # Should use fill_price (2700), not entry_price (2650)
         assert "Exit Price: 2700.0" in reflect_arg
+
+    @pytest.mark.asyncio
+    async def test_sell_links_trade_id_to_buy(self, lifecycle, trade_repo, graph):
+        """SELL with trade_id should update the SELL record with opening_trade_id."""
+        open_buy = _make_open_buy_record()
+        trade_repo.find_open_buy.return_value = open_buy
+
+        sell_id = uuid4()
+        result = _make_sell_result(fill_price=2700.0, trade_id=sell_id)
+
+        await lifecycle.on_trade(result)
+
+        # Should have called update for SELL trade with opening_trade_id
+        link_calls = [
+            c for c in trade_repo.update.call_args_list
+            if c[0][0] == sell_id and "opening_trade_id" in c[0][1]
+        ]
+        assert len(link_calls) == 1
+        assert link_calls[0][0][1]["opening_trade_id"] == str(open_buy.id)
+
+    @pytest.mark.asyncio
+    async def test_sell_stores_pnl_on_buy_record(self, lifecycle, trade_repo, graph):
+        """SELL should store P&L on the closing BUY record."""
+        open_buy = _make_open_buy_record(
+            price=Decimal("2500.00"), fill_price=Decimal("2500.00"), quantity=10,
+        )
+        trade_repo.find_open_buy.return_value = open_buy
+
+        result = _make_sell_result(fill_price=2700.0)
+
+        await lifecycle.on_trade(result)
+
+        # Find the update call for the BUY trade
+        close_calls = [
+            c for c in trade_repo.update.call_args_list
+            if c[0][0] == open_buy.id and "closed_at" in c[0][1]
+        ]
+        assert len(close_calls) == 1
+        update_data = close_calls[0][0][1]
+        assert "pnl" in update_data
+        assert update_data["pnl"] == "2000.00"  # (2700-2500)*10
+
+    @pytest.mark.asyncio
+    async def test_sell_stores_pnl_on_sell_record(self, lifecycle, trade_repo, graph):
+        """SELL should store P&L on the SELL trade record."""
+        open_buy = _make_open_buy_record(
+            price=Decimal("2500.00"), fill_price=Decimal("2500.00"), quantity=10,
+        )
+        trade_repo.find_open_buy.return_value = open_buy
+
+        sell_id = uuid4()
+        result = _make_sell_result(fill_price=2700.0, trade_id=sell_id)
+
+        await lifecycle.on_trade(result)
+
+        # Find the update call for the SELL trade
+        link_calls = [
+            c for c in trade_repo.update.call_args_list
+            if c[0][0] == sell_id and "pnl" in c[0][1]
+        ]
+        assert len(link_calls) == 1
+        assert link_calls[0][0][1]["pnl"] == "2000.00"
+
+    @pytest.mark.asyncio
+    async def test_sell_without_trade_id_skips_linkage(self, lifecycle, trade_repo, graph):
+        """SELL without trade_id should still reflect but skip DB linkage."""
+        open_buy = _make_open_buy_record()
+        trade_repo.find_open_buy.return_value = open_buy
+
+        # No trade_id — trade wasn't persisted (e.g., Supabase down)
+        result = _make_sell_result(fill_price=2700.0, trade_id=None)
+
+        await lifecycle.on_trade(result)
+
+        # Reflection should still happen
+        graph.reflect.assert_called_once()
+        # But only 1 update call (for the BUY close), not 2 (no SELL link)
+        assert trade_repo.update.call_count == 1
 
 
 # ── Tests: _format_returns ──────────────────────────────────────────────────

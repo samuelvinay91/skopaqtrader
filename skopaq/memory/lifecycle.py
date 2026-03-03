@@ -72,12 +72,14 @@ class TradeLifecycleManager:
         """Record context for a BUY trade.
 
         We don't trigger reflection on BUY — there's no P&L outcome yet.
-        The agent_state is captured in the trade record by the executor
-        and will be available when the matching SELL arrives.
+        The trade has already been persisted to Supabase by ``_run_lifecycle()``
+        in ``main.py``, so ``find_open_buy()`` will find it when the matching
+        SELL arrives.
         """
         logger.info(
-            "BUY recorded for %s — awaiting SELL to trigger reflection",
+            "BUY persisted for %s (trade_id=%s) — awaiting SELL to trigger reflection",
             result.symbol,
+            getattr(result, "trade_id", None),
         )
 
     async def _handle_sell(self, result: AnalysisResult) -> None:
@@ -132,25 +134,36 @@ class TradeLifecycleManager:
             pnl_pct,
         )
 
-        # Mark the BUY trade as closed
+        # Mark the BUY trade as closed with realized P&L
         now = datetime.now(timezone.utc)
         try:
             self._trade_repo.update(
                 open_buy.id,
-                {"closed_at": now.isoformat()},
+                {
+                    "closed_at": now.isoformat(),
+                    "pnl": str(pnl),
+                    "exit_reason": f"Closed by SELL (P&L: {pnl_pct:.2f}%)",
+                },
             )
         except Exception:
             logger.warning("Failed to mark BUY %s as closed", open_buy.id, exc_info=True)
 
-        # Update SELL trade with opening_trade_id link
-        if result.execution and hasattr(result.execution, "trade_id") and result.execution.trade_id:
+        # Update SELL trade with opening_trade_id link + realized P&L
+        sell_trade_id = getattr(result, "trade_id", None)
+        if sell_trade_id:
             try:
                 self._trade_repo.update(
-                    result.execution.trade_id,
-                    {"opening_trade_id": str(open_buy.id)},
+                    sell_trade_id,
+                    {
+                        "opening_trade_id": str(open_buy.id),
+                        "pnl": str(pnl),
+                        "exit_reason": f"SELL closed (P&L: {pnl_pct:.2f}%)",
+                    },
                 )
             except Exception:
                 logger.warning("Failed to link SELL to BUY", exc_info=True)
+        else:
+            logger.debug("No trade_id on result — SELL/BUY linkage skipped")
 
         # Trigger reflection with P&L outcome
         returns_losses = _format_returns(symbol, pnl, pnl_pct, buy_price, sell_price)
