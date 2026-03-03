@@ -27,13 +27,26 @@ logger = logging.getLogger(__name__)
 
 
 def _clean_for_insert(record: dict[str, Any]) -> dict[str, Any]:
-    """Remove None values and auto-generated fields before insert."""
+    """Remove None values and auto-generated fields before insert.
+
+    Converts non-JSON-serializable types:
+    - UUID, date, datetime → str
+    - Decimal → float  (Supabase NUMERIC columns accept floats)
+    """
+    from decimal import Decimal
+
     skip = {"id", "created_at", "updated_at"}
-    return {
-        k: (str(v) if isinstance(v, (UUID, date, datetime)) else v)
-        for k, v in record.items()
-        if k not in skip and v is not None
-    }
+    result = {}
+    for k, v in record.items():
+        if k in skip or v is None:
+            continue
+        if isinstance(v, (UUID, date, datetime)):
+            result[k] = str(v)
+        elif isinstance(v, Decimal):
+            result[k] = float(v)
+        else:
+            result[k] = v
+    return result
 
 
 # ── Trades ───────────────────────────────────────────────────────────────────
