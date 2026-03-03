@@ -43,6 +43,30 @@ class ConditionalLogic:
             return "tools_fundamentals"
         return "Done Fundamentals"
 
+    def should_continue_onchain(self, state: AgentState):
+        """Determine if on-chain analysis should continue."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_onchain"
+        return "Done Onchain"
+
+    def should_continue_defi(self, state: AgentState):
+        """Determine if DeFi/tokenomics analysis should continue."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_defi"
+        return "Done Defi"
+
+    def should_continue_funding(self, state: AgentState):
+        """Determine if funding rate analysis should continue."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_funding"
+        return "Done Funding"
+
     def should_continue_debate(self, state: AgentState) -> str:
         """Determine if debate should continue."""
 

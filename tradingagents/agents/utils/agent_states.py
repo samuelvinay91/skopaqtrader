@@ -84,6 +84,11 @@ class AgentState(MessagesState):
     news_report: Annotated[str, _last_str]
     fundamentals_report: Annotated[str, _last_str]
 
+    # crypto-specific analyst reports (empty string when asset_class != "crypto")
+    onchain_report: Annotated[str, _last_str]
+    defi_report: Annotated[str, _last_str]
+    funding_report: Annotated[str, _last_str]
+
     # researcher team discussion step
     investment_debate_state: Annotated[InvestDebateState, _last_invest_state]
     investment_plan: Annotated[str, _last_str]

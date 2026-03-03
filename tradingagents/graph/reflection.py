@@ -53,7 +53,19 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
         curr_news_report = current_state["news_report"]
         curr_fundamentals_report = current_state["fundamentals_report"]
 
-        return f"{curr_market_report}\n\n{curr_sentiment_report}\n\n{curr_news_report}\n\n{curr_fundamentals_report}"
+        # Crypto-specific reports (empty strings for equity trades)
+        onchain_report = current_state.get("onchain_report", "")
+        defi_report = current_state.get("defi_report", "")
+        funding_report = current_state.get("funding_report", "")
+        crypto_section = ""
+        if onchain_report or defi_report or funding_report:
+            crypto_section = (
+                f"\n\nOn-Chain Network Analysis:\n{onchain_report}"
+                f"\n\nDeFi/Tokenomics Analysis:\n{defi_report}"
+                f"\n\nFunding Rate/Derivatives Analysis:\n{funding_report}"
+            )
+
+        return f"{curr_market_report}\n\n{curr_sentiment_report}\n\n{curr_news_report}\n\n{curr_fundamentals_report}{crypto_section}"
 
     def _reflect_on_component(
         self, component_type: str, report: str, situation: str, returns_losses

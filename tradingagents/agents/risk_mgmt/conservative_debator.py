@@ -17,6 +17,18 @@ def create_conservative_debator(llm):
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
 
+        # Crypto-specific reports (empty strings for equity trades)
+        onchain_report = state.get("onchain_report", "")
+        defi_report = state.get("defi_report", "")
+        funding_report = state.get("funding_report", "")
+        crypto_section = ""
+        if onchain_report or defi_report or funding_report:
+            crypto_section = (
+                f"\nOn-Chain Network Analysis: {onchain_report}"
+                f"\nDeFi/Tokenomics Analysis: {defi_report}"
+                f"\nFunding Rate/Derivatives Analysis: {funding_report}"
+            )
+
         trader_decision = state["trader_investment_plan"]
 
         prompt = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
@@ -28,7 +40,7 @@ Your task is to actively counter the arguments of the Aggressive and Neutral Ana
 Market Research Report: {market_research_report}
 Social Media Sentiment Report: {sentiment_report}
 Latest World Affairs Report: {news_report}
-Company Fundamentals Report: {fundamentals_report}
+Company Fundamentals Report: {fundamentals_report}{crypto_section}
 Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints, do not hallucinate and just present your point.
 
 Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting."""

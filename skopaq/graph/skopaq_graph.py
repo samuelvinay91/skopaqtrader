@@ -67,9 +67,16 @@ class SkopaqTradingGraph:
     ) -> None:
         self._executor = executor
         self._upstream_config = upstream_config
-        self._selected_analysts = selected_analysts or [
-            "market", "social", "news", "fundamentals",
-        ]
+
+        # Default analyst selection: base 4 + crypto-specific when asset_class == "crypto"
+        if selected_analysts is not None:
+            self._selected_analysts = selected_analysts
+        else:
+            base = ["market", "social", "news", "fundamentals"]
+            if upstream_config.get("asset_class") == "crypto":
+                self._selected_analysts = base + ["onchain", "defi", "funding"]
+            else:
+                self._selected_analysts = base
         self._debug = debug
         self._memory_store = memory_store
         self._graph: Any = None  # Lazy-init upstream graph
@@ -233,8 +240,8 @@ class SkopaqTradingGraph:
 
     # ── Signal parsing ───────────────────────────────────────────────────
 
-    @staticmethod
     def _parse_signal(
+        self,
         symbol: str,
         decision: Any,
         state: Any,
@@ -283,9 +290,13 @@ class SkopaqTradingGraph:
                 if full_decision and len(str(full_decision).strip()) > len(action):
                     reasoning = str(full_decision).strip()[:2000]
 
+        # Pick exchange based on asset class in upstream config
+        asset_class = self._upstream_config.get("asset_class", "equity")
+        exchange = Exchange.BINANCE if asset_class == "crypto" else Exchange.NSE
+
         return TradingSignal(
             symbol=symbol,
-            exchange=Exchange.NSE,
+            exchange=exchange,
             action=action,
             confidence=confidence,
             reasoning=reasoning,

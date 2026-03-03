@@ -145,3 +145,121 @@ Added three reducer functions:
 **Why:** LLM agents (trained on Yahoo Finance conventions) often generate `RELIANCE.NS` instead of bare `RELIANCE`. The yfinance suffix logic in `interface.py` only *adds* `.NS` for the yfinance vendor — it doesn't *remove* it for INDstocks. This caused `ValueError: Symbol 'RELIANCE.NS' not found in NSE instruments`.
 
 **Backward compatible:** Yes — bare symbols pass through unchanged.
+
+---
+
+### Phase 3: Crypto-Specific Analyst Agents
+
+Three new analysts (on-chain, DeFi/tokenomics, funding rates) that run alongside the 4 base analysts during crypto trades. Activated only when `asset_class == "crypto"`.
+
+#### New Files (7) — all under `tradingagents/`
+
+| # | File | Purpose |
+|---|------|---------|
+| 12 | `tradingagents/dataflows/crypto_onchain.py` | Blockchair + Blockchain.info data fetching (network stats, address activity) |
+| 13 | `tradingagents/dataflows/crypto_defi.py` | DeFiLlama + CoinGecko data fetching (TVL, token fundamentals, chain overview) |
+| 14 | `tradingagents/dataflows/crypto_funding.py` | Binance Futures data fetching (funding rates, open interest, long/short ratios) |
+| 15 | `tradingagents/agents/utils/crypto_tools.py` | 8 `@tool`-decorated LangGraph functions wrapping the 3 dataflow modules |
+| 16 | `tradingagents/agents/analysts/onchain_analyst.py` | On-chain analyst factory (`create_onchain_analyst`) — blockchain network health |
+| 17 | `tradingagents/agents/analysts/defi_analyst.py` | DeFi analyst factory (`create_defi_analyst`) — TVL, supply dynamics, protocol metrics |
+| 18 | `tradingagents/agents/analysts/funding_analyst.py` | Funding rate analyst factory (`create_funding_analyst`) — derivatives sentiment |
+
+**Not modifications** — purely additive new files. All follow existing patterns (analyst factory pattern from `market_analyst.py`, dataflow pattern from `yfin_utils.py`).
+
+#### Modified Files (15)
+
+#### 19. `tradingagents/agents/utils/agent_states.py` — +3 crypto report state fields
+
+**What:** Added 3 new fields to `AgentState`:
+- `onchain_report: Annotated[str, _last_str]`
+- `defi_report: Annotated[str, _last_str]`
+- `funding_report: Annotated[str, _last_str]`
+
+**Why:** Each crypto analyst writes its output to a dedicated state field, read by downstream debate consumers.
+
+**Backward compatible:** Yes — uses existing `_last_str` reducer, defaults to `""` for equity trades.
+
+---
+
+#### 20. `tradingagents/graph/propagation.py` — +3 initial state fields
+
+**What:** Added `"onchain_report": "", "defi_report": "", "funding_report": ""` to `create_initial_state()`.
+
+**Backward compatible:** Yes — empty strings have no effect on equity debate prompts.
+
+---
+
+#### 21. `tradingagents/graph/setup.py` — +3 analyst registration blocks
+
+**What:** Added 3 conditional registration blocks in `setup_graph()`:
+```python
+if "onchain" in selected_analysts:
+    analyst_nodes["onchain"] = create_onchain_analyst(self._get_llm("onchain_analyst"))
+    tool_nodes["onchain"] = self.tool_nodes["onchain"]
+```
+Same pattern for `"defi"` and `"funding"`.
+
+**Why:** The existing dynamic loop automatically handles fan-out, tool loops, and fan-in for any analyst in `analyst_nodes` — no additional wiring code needed.
+
+**Backward compatible:** Yes — when `selected_analysts` is the default 4, these blocks are skipped.
+
+---
+
+#### 22. `tradingagents/graph/conditional_logic.py` — +3 should_continue methods
+
+**What:** Added `should_continue_onchain()`, `should_continue_defi()`, `should_continue_funding()` following the exact pattern of `should_continue_market()`.
+
+**Backward compatible:** Yes — methods are only called if the corresponding analyst is registered.
+
+---
+
+#### 23. `tradingagents/graph/trading_graph.py` — +3 ToolNodes + imports
+
+**What:**
+- Imported 8 crypto tool functions from `tradingagents.agents.utils.crypto_tools`
+- Added 3 `ToolNode` entries in `_create_tool_nodes()` for onchain, defi, funding
+- Added 3 fields to `_log_state()` debug output
+
+**Backward compatible:** Yes — ToolNodes are only registered if the analyst is selected.
+
+---
+
+#### 24. `tradingagents/agents/__init__.py` — +3 factory imports/exports
+
+**What:** Added imports and `__all__` entries for `create_onchain_analyst`, `create_defi_analyst`, `create_funding_analyst`.
+
+**Backward compatible:** Yes — additive exports only.
+
+---
+
+#### 25-33. Debate consumers (9 files) — Append crypto reports to prompts
+
+**What:** All 9 downstream consumers now conditionally append crypto analyst reports when available:
+
+```python
+onchain_report = state.get("onchain_report", "")
+defi_report = state.get("defi_report", "")
+funding_report = state.get("funding_report", "")
+crypto_section = ""
+if onchain_report or defi_report or funding_report:
+    crypto_section = (
+        f"\n\nOn-Chain Network Analysis:\n{onchain_report}"
+        f"\n\nDeFi/Tokenomics Analysis:\n{defi_report}"
+        f"\n\nFunding Rate/Derivatives Analysis:\n{funding_report}"
+    )
+```
+
+**Files modified:**
+1. `tradingagents/agents/researchers/bull_researcher.py` — `curr_situation` + prompt injection
+2. `tradingagents/agents/researchers/bear_researcher.py` — `curr_situation` + prompt injection
+3. `tradingagents/agents/managers/research_manager.py` — `curr_situation` for memory lookup
+4. `tradingagents/agents/trader/trader.py` — `curr_situation` for memory lookup
+5. `tradingagents/agents/risk_mgmt/aggressive_debator.py` — prompt injection after fundamentals
+6. `tradingagents/agents/risk_mgmt/conservative_debator.py` — prompt injection after fundamentals
+7. `tradingagents/agents/risk_mgmt/neutral_debator.py` — prompt injection after fundamentals
+8. `tradingagents/agents/managers/risk_manager.py` — `curr_situation` for memory lookup
+9. `tradingagents/graph/reflection.py` — `_extract_current_situation()` helper
+
+**Why:** Debate participants need all analyst data to make informed arguments. Crypto reports are only included when non-empty, so equity trades see identical prompts.
+
+**Backward compatible:** Yes — `state.get("onchain_report", "")` returns empty string for equity trades, `crypto_section` stays empty, prompts unchanged.

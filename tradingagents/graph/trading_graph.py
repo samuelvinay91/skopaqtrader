@@ -33,6 +33,18 @@ from tradingagents.agents.utils.agent_utils import (
     get_global_news
 )
 
+# Crypto-specific tools (on-chain, DeFi, funding)
+from tradingagents.agents.utils.crypto_tools import (
+    get_blockchain_stats,
+    get_address_activity,
+    get_token_fundamentals,
+    get_defi_tvl,
+    get_chain_tvl_overview,
+    get_funding_rates,
+    get_open_interest,
+    get_long_short_ratio,
+)
+
 from .conditional_logic import ConditionalLogic
 from .setup import GraphSetup
 from .propagation import Propagator
@@ -186,6 +198,16 @@ class TradingAgentsGraph:
                     get_income_statement,
                 ]
             ),
+            # Crypto-specific analyst tool nodes
+            "onchain": ToolNode(
+                [get_blockchain_stats, get_address_activity]
+            ),
+            "defi": ToolNode(
+                [get_token_fundamentals, get_defi_tvl, get_chain_tvl_overview]
+            ),
+            "funding": ToolNode(
+                [get_funding_rates, get_open_interest, get_long_short_ratio]
+            ),
         }
 
     def propagate(self, company_name, trade_date):
@@ -232,6 +254,9 @@ class TradingAgentsGraph:
             "sentiment_report": final_state["sentiment_report"],
             "news_report": final_state["news_report"],
             "fundamentals_report": final_state["fundamentals_report"],
+            "onchain_report": final_state.get("onchain_report", ""),
+            "defi_report": final_state.get("defi_report", ""),
+            "funding_report": final_state.get("funding_report", ""),
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],

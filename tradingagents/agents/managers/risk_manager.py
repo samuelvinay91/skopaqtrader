@@ -15,7 +15,19 @@ def create_risk_manager(llm, memory):
         sentiment_report = state["sentiment_report"]
         trader_plan = state["investment_plan"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        # Crypto-specific reports (empty strings for equity trades)
+        onchain_report = state.get("onchain_report", "")
+        defi_report = state.get("defi_report", "")
+        funding_report = state.get("funding_report", "")
+        crypto_section = ""
+        if onchain_report or defi_report or funding_report:
+            crypto_section = (
+                f"\n\nOn-Chain Network Analysis:\n{onchain_report}"
+                f"\n\nDeFi/Tokenomics Analysis:\n{defi_report}"
+                f"\n\nFunding Rate/Derivatives Analysis:\n{funding_report}"
+            )
+
+        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}{crypto_section}"
         past_memories = memory.get_memories(curr_situation, n_matches=2)
 
         past_memory_str = ""

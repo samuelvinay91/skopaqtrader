@@ -65,6 +65,9 @@ class GraphSetup:
                 - "social": Social media analyst
                 - "news": News analyst
                 - "fundamentals": Fundamentals analyst
+                - "onchain": On-chain analyst (crypto only)
+                - "defi": DeFi/tokenomics analyst (crypto only)
+                - "funding": Funding rate analyst (crypto only)
         """
         if len(selected_analysts) == 0:
             raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
@@ -96,6 +99,25 @@ class GraphSetup:
                 self._get_llm("fundamentals_analyst")
             )
             tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
+
+        # Crypto-specific analysts (activated when asset_class == "crypto")
+        if "onchain" in selected_analysts:
+            analyst_nodes["onchain"] = create_onchain_analyst(
+                self._get_llm("onchain_analyst")
+            )
+            tool_nodes["onchain"] = self.tool_nodes["onchain"]
+
+        if "defi" in selected_analysts:
+            analyst_nodes["defi"] = create_defi_analyst(
+                self._get_llm("defi_analyst")
+            )
+            tool_nodes["defi"] = self.tool_nodes["defi"]
+
+        if "funding" in selected_analysts:
+            analyst_nodes["funding"] = create_funding_analyst(
+                self._get_llm("funding_analyst")
+            )
+            tool_nodes["funding"] = self.tool_nodes["funding"]
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(
