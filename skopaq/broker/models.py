@@ -140,22 +140,29 @@ class OrderResponse(BaseModel):
 
 
 class Position(BaseModel):
-    """Open position from ``GET /portfolio/positions``."""
+    """Open position from ``GET /portfolio/positions``.
+
+    INDstocks uses shortened field names (``net_qty``, ``avg_price``,
+    ``buy_qty``, etc.).  Pydantic ``validation_alias`` lets the API
+    response hydrate our canonical field names automatically, while
+    ``extra = "allow"`` keeps any additional fields the API may add.
+    """
 
     symbol: str = ""
     exchange: str = ""
     product: str = ""
-    quantity: Decimal = Decimal("0")
-    average_price: float = 0.0
+    quantity: Decimal = Field(Decimal("0"), validation_alias="net_qty")
+    average_price: float = Field(0.0, validation_alias="avg_price")
     last_price: float = 0.0
-    pnl: float = 0.0
+    pnl: float = Field(0.0, validation_alias="realized_profit")
     day_pnl: float = 0.0
-    buy_quantity: Decimal = Decimal("0")
-    sell_quantity: Decimal = Decimal("0")
-    buy_value: float = 0.0
-    sell_value: float = 0.0
+    buy_quantity: Decimal = Field(Decimal("0"), validation_alias="buy_qty")
+    sell_quantity: Decimal = Field(Decimal("0"), validation_alias="sell_qty")
+    buy_value: float = Field(0.0, validation_alias="day_buy_val")
+    sell_value: float = Field(0.0, validation_alias="day_sell_val")
+    security_id: str = ""
 
-    model_config = {"extra": "allow"}
+    model_config = {"extra": "allow", "populate_by_name": True}
 
 
 class Holding(BaseModel):
