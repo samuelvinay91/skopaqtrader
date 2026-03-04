@@ -51,6 +51,7 @@ _ROLE_PREFERENCES: dict[str, list[tuple[str, str]]] = {
     "aggressive_debator":   [("google", "gemini-3-flash-preview")],
     "neutral_debator":      [("google", "gemini-3-flash-preview")],
     "conservative_debator": [("google", "gemini-3-flash-preview")],
+    "sell_analyst":         [("google", "gemini-3-flash-preview")],
 }
 
 # Env var names per provider (checked to see if key is available)

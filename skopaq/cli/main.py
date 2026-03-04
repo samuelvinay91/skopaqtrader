@@ -24,6 +24,10 @@ from skopaq.cli.display import (
     display_analyze_result,
     display_analyze_start,
     display_error,
+    display_monitor_ai_decision,
+    display_monitor_result,
+    display_monitor_start,
+    display_monitor_tick,
     display_scan_results,
     display_scan_start,
     display_serve_banner,
@@ -195,6 +199,16 @@ def trade(
     from skopaq.config import SkopaqConfig
     config = SkopaqConfig()
 
+    # Double-confirmation gate for LIVE mode — real money at stake
+    if config.trading_mode == "live":
+        typer.echo(
+            "\n  ⚠  LIVE TRADING MODE — real orders will be placed on INDstocks.\n"
+            f"     Symbol: {symbol}    Date: {date}\n"
+        )
+        if not typer.confirm("  Proceed with LIVE execution?", default=False):
+            typer.echo("  Aborted.")
+            raise typer.Exit()
+
     display_trade_start(symbol, date, config.trading_mode)
     result = asyncio.run(_run_trade(symbol, date))
 
@@ -246,7 +260,16 @@ async def _run_trade(symbol: str, trade_date: str):
     else:
         rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
 
-    router = OrderRouter(config, paper)
+    # Wire live broker client when in live mode
+    live_client = None
+    if config.trading_mode == "live":
+        from skopaq.broker.client import INDstocksClient
+        from skopaq.broker.token_manager import TokenManager
+
+        token_mgr = TokenManager()
+        live_client = INDstocksClient(config, token_mgr)
+
+    router = OrderRouter(config, paper, live_client=live_client)
     safety = SafetyChecker(
         rules=rules,
         max_sector_concentration_pct=config.max_sector_concentration_pct,
@@ -298,11 +321,19 @@ async def _run_trade(symbol: str, trade_date: str):
         memory_store=memory_store,
     )
 
-    result = await graph.analyze_and_execute(
-        analysis_symbol, trade_date,
-        regime_scale=regime_scale,
-        calendar_scale=calendar_scale,
-    )
+    # Open live client context if wired (INDstocksClient requires async with)
+    if live_client is not None:
+        await live_client.__aenter__()
+
+    try:
+        result = await graph.analyze_and_execute(
+            analysis_symbol, trade_date,
+            regime_scale=regime_scale,
+            calendar_scale=calendar_scale,
+        )
+    finally:
+        if live_client is not None:
+            await live_client.__aexit__(None, None, None)
 
     # Post-execution: track lifecycle (BUY/SELL linkage + reflection)
     if config.reflection_enabled and memory_store is not None:
@@ -498,6 +529,117 @@ async def _run_scan(max_candidates: int):
         social_screener=social_screener,
     )
     return await scanner.scan_once()
+
+
+# ── Monitor ─────────────────────────────────────────────────────────────────
+
+
+@app.command("monitor")
+def monitor(
+    poll_interval: int = typer.Option(0, help="Poll interval in seconds (0 = use config)."),
+    stop_loss: float = typer.Option(0.0, help="Hard stop-loss % override (0 = use config)."),
+    eod_exit_minutes: int = typer.Option(0, help="EOD exit minutes override (0 = use config)."),
+    no_ai: bool = typer.Option(False, "--no-ai", help="Disable AI sell analyst (rule-based only)."),
+) -> None:
+    """Monitor open positions and auto-sell using AI + safety rules."""
+    from skopaq.config import SkopaqConfig
+
+    config = SkopaqConfig()
+
+    # Apply CLI overrides
+    if poll_interval > 0:
+        config.monitor_poll_interval_seconds = poll_interval
+    if stop_loss > 0:
+        config.monitor_hard_stop_pct = stop_loss
+    if eod_exit_minutes > 0:
+        config.monitor_eod_exit_minutes_before_close = eod_exit_minutes
+
+    ai_enabled = not no_ai
+
+    display_monitor_start(
+        mode=config.trading_mode,
+        poll_interval=config.monitor_poll_interval_seconds,
+        stop_pct=config.monitor_hard_stop_pct,
+        eod_minutes=config.monitor_eod_exit_minutes_before_close,
+        ai_enabled=ai_enabled,
+    )
+
+    result = asyncio.run(_run_monitor(config, ai_enabled))
+    display_monitor_result(result)
+
+
+async def _run_monitor(config, ai_enabled: bool):
+    """Async helper to run the position monitor."""
+    import signal as sig
+
+    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.token_manager import TokenManager
+    from skopaq.constants import PAPER_SAFETY_RULES, SAFETY_RULES
+    from skopaq.execution.executor import Executor
+    from skopaq.execution.order_router import OrderRouter
+    from skopaq.execution.position_monitor import PositionMonitor
+    from skopaq.execution.safety_checker import SafetyChecker
+
+    # Always need an INDstocksClient for LTP polling
+    token_mgr = TokenManager()
+    client = INDstocksClient(config, token_mgr)
+
+    # Wire live or paper backend
+    from skopaq.broker.paper_engine import PaperEngine
+
+    paper = PaperEngine(initial_capital=config.initial_paper_capital)
+    live_client = None
+    if config.trading_mode == "live":
+        live_client = client  # reuse same client
+
+    router = OrderRouter(config, paper, live_client=live_client)
+    rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+    safety = SafetyChecker(
+        rules=rules,
+        max_sector_concentration_pct=config.max_sector_concentration_pct,
+    )
+    executor = Executor(router, safety)
+
+    # Build LLM for sell analyst (if AI enabled)
+    llm = None
+    if ai_enabled:
+        try:
+            from skopaq.llm import bridge_env_vars, build_llm_map
+
+            bridge_env_vars(config)
+            llm_map = build_llm_map()
+            llm = llm_map.get("sell_analyst", llm_map.get("_default"))
+            if llm:
+                logger.info("Sell analyst LLM ready")
+            else:
+                logger.warning("No LLM available for sell_analyst — AI tier disabled")
+                ai_enabled = False
+        except Exception:
+            logger.warning("Failed to build LLM map — AI tier disabled", exc_info=True)
+            ai_enabled = False
+
+    # Graceful shutdown via Ctrl+C
+    stop_event = asyncio.Event()
+
+    def _handle_sigint(*_):
+        logger.info("Ctrl+C received — shutting down monitor gracefully...")
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(sig.SIGINT, _handle_sigint)
+
+    # Run monitor within client context
+    async with client:
+        monitor_instance = PositionMonitor(
+            executor=executor,
+            client=client,
+            router=router,
+            config=config,
+            llm=llm,
+            stop_event=stop_event,
+            ai_enabled=ai_enabled,
+        )
+        return await monitor_instance.run()
 
 
 # ── Serve ────────────────────────────────────────────────────────────────────

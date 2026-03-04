@@ -34,9 +34,11 @@ from skopaq.cli.theme import (
 )
 
 if TYPE_CHECKING:
+    from skopaq.agents.sell_analyst import SellDecision
     from skopaq.broker.models import ExecutionResult, TradingSignal
     from skopaq.broker.token_manager import TokenHealth
     from skopaq.config import SkopaqConfig
+    from skopaq.execution.position_monitor import MonitorResult
     from skopaq.graph.skopaq_graph import AnalysisResult
     from skopaq.scanner.models import ScannerCandidate
 
@@ -469,6 +471,128 @@ def display_success(message: str) -> None:
             padding=(0, 2),
         )
     )
+
+
+# ── Monitor Command ──────────────────────────────────────────────────────────
+
+
+def display_monitor_start(
+    mode: str,
+    poll_interval: int,
+    stop_pct: float,
+    eod_minutes: int,
+    ai_enabled: bool,
+) -> None:
+    """Show monitor startup configuration panel."""
+    table = Table(
+        show_header=False,
+        box=box.SIMPLE,
+        padding=(0, 2),
+        expand=True,
+    )
+    table.add_column("Key", style="bold", width=16)
+    table.add_column("Value")
+
+    mode_style = SUCCESS if mode == "paper" else "bold red"
+    table.add_row("Mode", f"[{mode_style}]{mode.upper()}[/{mode_style}]")
+    table.add_row("Poll Interval", f"{poll_interval}s")
+    table.add_row("Hard Stop", f"{stop_pct:.0%}")
+    table.add_row("EOD Exit", f"{eod_minutes} min before close")
+
+    if ai_enabled:
+        table.add_row("AI Analyst", f"{OK}  [bold green]ENABLED[/bold green]")
+    else:
+        table.add_row("AI Analyst", f"[{DIM}]DISABLED[/{DIM}]")
+
+    panel = Panel(
+        table,
+        title="[bold cyan]Position Monitor[/bold cyan]",
+        border_style=HEADER_BORDER,
+        padding=(1, 1),
+    )
+    console.print(panel)
+    console.print()
+
+
+def display_monitor_tick(
+    symbol: str,
+    ltp: float,
+    pnl_pct: float,
+    action: str = "",
+) -> None:
+    """Show single-line status for a poll cycle."""
+    pnl_style = SUCCESS if pnl_pct >= 0 else ERROR
+    line = (
+        f"  [{ACCENT}]{symbol}[/{ACCENT}]"
+        f"  LTP=[bold]₹{ltp:,.2f}[/bold]"
+        f"  P&L=[{pnl_style}]{pnl_pct:+.2f}%[/{pnl_style}]"
+    )
+    if action:
+        line += f"  → [{WARNING}]{action}[/{WARNING}]"
+    console.print(line)
+
+
+def display_monitor_ai_decision(
+    symbol: str, decision: SellDecision,
+) -> None:
+    """Show the AI sell analyst recommendation in a compact panel."""
+    action_style = "bold red" if decision.action == "SELL" else "bold yellow"
+    conf_style = SUCCESS if decision.confidence >= 70 else WARNING if decision.confidence >= 40 else ERROR
+    bar = _confidence_bar(decision.confidence, width=15)
+
+    content = Text()
+    content.append(f"{decision.action}", style=action_style)
+    content.append(f"  confidence=", style=DIM)
+    content.append(f"{decision.confidence}%", style=conf_style)
+    content.append(f"  {bar}\n")
+    if decision.reasoning:
+        content.append(decision.reasoning[:300], style=DIM)
+
+    console.print(
+        Panel(
+            content,
+            title=f"[bold]AI Analyst — {symbol}[/bold]",
+            border_style=INFO_BORDER,
+            padding=(0, 2),
+        )
+    )
+
+
+def display_monitor_result(result: MonitorResult) -> None:
+    """Show session summary when the monitor exits."""
+    table = Table(
+        show_header=False,
+        box=box.ROUNDED,
+        padding=(0, 2),
+        expand=True,
+    )
+    table.add_column("Field", style="bold", width=16)
+    table.add_column("Value")
+
+    table.add_row("Positions", str(result.positions_monitored))
+    table.add_row("Cycles", str(result.cycles))
+    table.add_row("Sells Executed", f"[bold green]{result.sells_executed}[/bold green]")
+
+    if result.sells_failed:
+        table.add_row("Sells Failed", f"[bold red]{result.sells_failed}[/bold red]")
+
+    pnl_style = SUCCESS if result.total_pnl >= 0 else ERROR
+    table.add_row(
+        "Total P&L",
+        f"[{pnl_style}]₹{result.total_pnl:,.2f}[/{pnl_style}]",
+    )
+
+    for reason in result.exit_reasons:
+        table.add_row("Exit", f"[{DIM}]{reason}[/{DIM}]")
+
+    border = STATUS_BORDER if result.sells_failed == 0 else WARNING_BORDER
+    panel = Panel(
+        table,
+        title="[bold]Monitor Summary[/bold]",
+        border_style=border,
+        padding=(1, 1),
+    )
+    console.print(panel)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

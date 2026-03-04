@@ -76,8 +76,20 @@ class SkopaqConfig(BaseSettings):
     atr_multiplier: float = 2.0          # Stop distance in ATR units
     atr_period: int = 14                 # ATR lookback period
 
+    # ── Confidence Gating ─────────────────────────────────────────────
+    min_confidence_pct: int = 0            # 0 = disabled; e.g. 40 to reject <40%
+    confidence_sizing_enabled: bool = True  # Scale position size by confidence
+
     # ── Sector Concentration ──────────────────────────────────────────
     max_sector_concentration_pct: float = 0.40  # Max 40% in any one sector
+
+    # ── Position Monitor ─────────────────────────────────────────────
+    monitor_poll_interval_seconds: int = 10
+    monitor_hard_stop_pct: float = 0.04           # 4% hard stop (safety tier)
+    monitor_eod_exit_minutes_before_close: int = 10  # sell at 15:20 IST
+    monitor_ai_interval_cycles: int = 6           # AI every 6 polls (~60s)
+    monitor_trailing_stop_enabled: bool = False
+    monitor_trailing_stop_pct: float = 0.02       # 2% trail from high-water
 
     # ── Regime Detection ──────────────────────────────────────────────
     regime_detection_enabled: bool = False  # Off until tested with live data
