@@ -367,6 +367,88 @@ class TestSectorConcentration:
         assert any("Sector" in r and "BANKING" in r for r in result.rejections)
 
 
+class TestMinimumConfidence:
+    """Validate the confidence gate safety check."""
+
+    def test_below_threshold_rejected(self):
+        """Signal with 30% confidence < 40% minimum → rejected."""
+        rules = SafetyRules(
+            min_confidence_pct=40, market_hours_only=False,
+            require_stop_loss=False, max_lots_per_position=10000,
+            max_order_value_inr=10_000_000, max_position_pct=1.0,
+        )
+        checker = SafetyChecker(rules=rules)
+        signal = TradingSignal(
+            symbol="RELIANCE", action="BUY", confidence=30, entry_price=2500,
+        )
+        order = _buy_order(qty=1, price=100)
+        funds = Funds(available_margin=500_000)
+        result = checker.validate(order, signal, [], funds, 500_000)
+        assert not result.passed
+        assert any("Confidence 30%" in r for r in result.rejections)
+
+    def test_above_threshold_passes(self):
+        """Signal with 75% confidence > 40% minimum → passes."""
+        rules = SafetyRules(
+            min_confidence_pct=40, market_hours_only=False,
+            require_stop_loss=False, max_lots_per_position=10000,
+            max_order_value_inr=10_000_000, max_position_pct=1.0,
+        )
+        checker = SafetyChecker(rules=rules)
+        signal = TradingSignal(
+            symbol="RELIANCE", action="BUY", confidence=75, entry_price=2500,
+        )
+        order = _buy_order(qty=1, price=100)
+        funds = Funds(available_margin=500_000)
+        result = checker.validate(order, signal, [], funds, 500_000)
+        assert result.passed
+
+    def test_at_threshold_passes(self):
+        """Signal exactly at 40% threshold → passes (not strictly below)."""
+        rules = SafetyRules(
+            min_confidence_pct=40, market_hours_only=False,
+            require_stop_loss=False, max_lots_per_position=10000,
+            max_order_value_inr=10_000_000, max_position_pct=1.0,
+        )
+        checker = SafetyChecker(rules=rules)
+        signal = TradingSignal(
+            symbol="RELIANCE", action="BUY", confidence=40, entry_price=2500,
+        )
+        order = _buy_order(qty=1, price=100)
+        funds = Funds(available_margin=500_000)
+        result = checker.validate(order, signal, [], funds, 500_000)
+        assert result.passed
+
+    def test_disabled_when_zero(self):
+        """min_confidence_pct=0 disables the gate — even 10% passes."""
+        rules = SafetyRules(
+            min_confidence_pct=0, market_hours_only=False,
+            require_stop_loss=False, max_lots_per_position=10000,
+            max_order_value_inr=10_000_000, max_position_pct=1.0,
+        )
+        checker = SafetyChecker(rules=rules)
+        signal = TradingSignal(
+            symbol="RELIANCE", action="BUY", confidence=10, entry_price=2500,
+        )
+        order = _buy_order(qty=1, price=100)
+        funds = Funds(available_margin=500_000)
+        result = checker.validate(order, signal, [], funds, 500_000)
+        assert result.passed
+
+    def test_no_signal_skipped(self):
+        """When signal is None, the confidence check is skipped."""
+        rules = SafetyRules(
+            min_confidence_pct=40, market_hours_only=False,
+            require_stop_loss=False, max_lots_per_position=10000,
+            max_order_value_inr=10_000_000, max_position_pct=1.0,
+        )
+        checker = SafetyChecker(rules=rules)
+        order = _sell_order(qty=1, price=100)
+        funds = Funds(available_margin=500_000)
+        result = checker.validate(order, None, [], funds, 500_000)
+        assert result.passed
+
+
 class TestReset:
     def test_daily_reset_clears_pnl(self, checker, funds, signal_with_sl):
         checker.record_pnl(-20_000)

@@ -74,11 +74,21 @@ class Executor:
             regime_scale: Market regime multiplier (0.0–1.2).
             calendar_scale: Event calendar multiplier (0.0–1.0).
         """
-        # Step 0: ATR-based position sizing (BUY only)
+        # Step 0a: Resolve entry_price if missing (upstream agents don't set it)
+        if signal.action == "BUY" and not signal.entry_price:
+            price = self._fetch_current_price(signal.symbol)
+            if price:
+                signal.entry_price = price
+                logger.info("Resolved entry_price for %s: %.2f", signal.symbol, price)
+
+        # Step 0b: ATR-based position sizing (BUY only)
         if self._sizer and signal.action == "BUY" and signal.entry_price:
+            # Map confidence [0, 100] → scale [0.5, 1.0]
+            confidence_scale = 0.5 + (signal.confidence / 100.0) * 0.5
             await self._apply_position_sizing(
                 signal, trade_date or date.today().isoformat(),
                 regime_scale, calendar_scale,
+                confidence_scale=confidence_scale,
             )
 
         # Step 1: Build order from signal
@@ -143,6 +153,7 @@ class Executor:
         trade_date: str,
         regime_scale: float,
         calendar_scale: float,
+        confidence_scale: float = 1.0,
     ) -> None:
         """Compute ATR-based position size and mutate the signal in place.
 
@@ -160,6 +171,7 @@ class Executor:
                 trade_date=trade_date,
                 regime_scale=regime_scale,
                 calendar_scale=calendar_scale,
+                confidence_scale=confidence_scale,
             )
 
             # Mutate signal with computed values
@@ -168,9 +180,10 @@ class Executor:
 
             logger.info(
                 "Position sized %s: qty=%d, stop=%.2f, risk=%.0f INR, "
-                "ATR=%.2f (%s), regime=%.1f, calendar=%.1f",
+                "ATR=%.2f (%s), regime=%.1f, calendar=%.1f, confidence=%.2f",
                 signal.symbol, size.quantity, size.stop_loss, size.risk_amount,
                 size.atr, size.atr_source, regime_scale, calendar_scale,
+                confidence_scale,
             )
 
         except Exception:
@@ -178,6 +191,14 @@ class Executor:
                 "Position sizing failed for %s — using signal defaults",
                 signal.symbol, exc_info=True,
             )
+            # Ensure stop-loss is set even when sizer fails — safety checker
+            # requires it for BUY orders in live mode.
+            if not signal.stop_loss and signal.entry_price:
+                signal.stop_loss = round(signal.entry_price * 0.98, 2)
+                logger.info(
+                    "Fallback stop-loss for %s: %.2f (2%% below entry)",
+                    signal.symbol, signal.stop_loss,
+                )
 
     def _build_order(self, signal: TradingSignal) -> Optional[OrderRequest]:
         """Convert a TradingSignal into an OrderRequest."""
@@ -206,3 +227,27 @@ class Executor:
             product=Product.CNC,
             tag=f"skopaq-{signal.confidence}",
         )
+
+    @staticmethod
+    def _fetch_current_price(symbol: str) -> Optional[float]:
+        """Fetch current market price via yfinance (best-effort).
+
+        Indian stocks use the ``.NS`` suffix on Yahoo Finance.
+        Returns None on any error — caller should handle gracefully.
+        """
+        try:
+            import yfinance as yf
+
+            # Indian stocks need .NS suffix for Yahoo Finance
+            yf_symbol = f"{symbol}.NS" if not any(
+                symbol.endswith(s) for s in (".NS", ".BO", "-USD", "USDT")
+            ) else symbol
+
+            ticker = yf.Ticker(yf_symbol)
+            info = ticker.fast_info
+            price = getattr(info, "last_price", None)
+            if price and price > 0:
+                return round(float(price), 2)
+        except Exception:
+            logger.debug("yfinance price fetch failed for %s", symbol, exc_info=True)
+        return None

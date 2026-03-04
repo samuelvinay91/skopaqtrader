@@ -35,6 +35,9 @@ class SafetyRules:
     require_stop_loss: bool = True
     min_stop_loss_pct: float = 0.02  # At least 2% stop loss
 
+    # Confidence gate
+    min_confidence_pct: int = 0  # 0 = disabled; e.g., 40 to reject <40% signals
+
     # Forbidden actions
     no_naked_option_selling: bool = True
 

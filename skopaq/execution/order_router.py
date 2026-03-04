@@ -21,6 +21,7 @@ from skopaq.broker.models import (
     TradingSignal,
 )
 from skopaq.broker.paper_engine import PaperEngine
+from skopaq.broker.scrip_resolver import resolve_security_id
 from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
@@ -75,19 +76,34 @@ class OrderRouter:
         order: OrderRequest,
         signal: Optional[TradingSignal],
     ) -> ExecutionResult:
-        """Execute via live INDstocks API."""
+        """Execute via live INDstocks API.
+
+        Resolves ``security_id`` from the instruments CSV if not already
+        set on the order, then places the order via the broker client.
+        """
         if self._live is None:
             logger.error("Live client not configured — falling back to paper")
             return self._execute_paper(order, signal)
 
         try:
+            # Resolve security_id if missing (executor builds orders without it)
+            if not order.security_id:
+                order.security_id = await resolve_security_id(
+                    self._live, order.symbol, order.exchange.value,
+                )
+                logger.info(
+                    "Resolved %s → security_id=%s",
+                    order.symbol, order.security_id,
+                )
+
             response = await self._live.place_order(order)
             return ExecutionResult(
                 success=True,
                 order=response,
                 signal=signal,
                 mode="live",
-                brokerage=5.0,
+                fill_price=order.price,   # Limit price (actual fill via order book)
+                brokerage=20.0,           # INDstocks flat fee estimate
             )
         except Exception as exc:
             logger.error("Live order failed: %s — NOT falling back to paper", exc)

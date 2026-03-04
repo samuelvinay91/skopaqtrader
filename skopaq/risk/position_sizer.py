@@ -69,6 +69,7 @@ class PositionSizer:
         trade_date: str,
         regime_scale: float = 1.0,
         calendar_scale: float = 1.0,
+        confidence_scale: float = 1.0,
     ) -> PositionSize:
         """Compute position size for a trade.
 
@@ -79,6 +80,7 @@ class PositionSizer:
             trade_date: Current date (YYYY-MM-DD) for ATR lookup.
             regime_scale: Market regime multiplier (0.0–1.2, default 1.0).
             calendar_scale: Event calendar multiplier (0.0–1.0, default 1.0).
+            confidence_scale: AI confidence multiplier (0.5–1.0, default 1.0).
 
         Returns:
             PositionSize with quantity, stop_loss, risk_amount, and ATR value.
@@ -104,8 +106,10 @@ class PositionSizer:
         # Compute risk budget
         risk_amount = equity * self._risk_pct
 
-        # Apply regime + calendar scaling to risk budget
-        effective_scale = max(0.0, min(regime_scale * calendar_scale, 1.5))
+        # Apply regime + calendar + confidence scaling to risk budget
+        effective_scale = max(0.0, min(
+            regime_scale * calendar_scale * confidence_scale, 1.5,
+        ))
         risk_amount *= effective_scale
 
         # Stop distance in price units

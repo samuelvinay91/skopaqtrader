@@ -45,6 +45,12 @@ Guidelines for Decision-Making:
 Deliverables:
 - A clear and actionable recommendation: Buy, Sell, or Hold.
 - Detailed reasoning anchored in the debate and past reflections.
+- A conviction score on the final line of your response in this exact format:
+  CONFIDENCE: <number from 0 to 100>
+  where 0 means no conviction at all and 100 means absolute certainty. Base this on:
+  (a) how aligned the three analysts were (unanimous agreement = higher),
+  (b) the strength of supporting data (strong fundamentals/technicals = higher),
+  (c) how many past memories support vs contradict this call.
 
 ---
 

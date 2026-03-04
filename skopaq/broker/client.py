@@ -403,7 +403,7 @@ class INDstocksClient:
             "order_type": order.order_type.value,
             "validity": order.validity.value,
             "security_id": order.security_id,
-            "qty": order.quantity,                   # quantity → qty
+            "qty": int(order.quantity),               # quantity → qty (int for JSON)
             "is_amo": order.is_amo,
             "algo_id": order.algo_id,
         }
@@ -546,7 +546,19 @@ class INDstocksClient:
         """
         data = await self._request("GET", "/funds")
         if isinstance(data, dict):
-            return Funds(**data)
+            # INDstocks returns nested structure — map to our flat model.
+            # Key fields: detailed_avl_balance.eq_cnc (equity CNC buying power),
+            # funds_added, sod_balance, pledge_received.
+            avl = data.get("detailed_avl_balance", {})
+            eq_cnc = float(avl.get("eq_cnc", 0))
+            pledge = float(data.get("pledge_received", 0))
+
+            return Funds(
+                available_cash=eq_cnc,
+                available_margin=eq_cnc,
+                used_margin=0.0,
+                total_collateral=eq_cnc + pledge,
+            )
         return Funds()
 
     # ── User ─────────────────────────────────────────────────────────────

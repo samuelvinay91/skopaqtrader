@@ -242,3 +242,60 @@ class TestCustomParameters:
         )
         # stop_distance = 50 * 3.0 = 150, qty = 10000/150 = 66
         assert result.quantity == 66
+
+
+class TestConfidenceScaling:
+    """Position size should scale with AI confidence."""
+
+    def test_full_confidence_no_reduction(self, sizer, mock_atr_vendor):
+        """confidence_scale=1.0 (100% confidence) → same as baseline."""
+        result = sizer.compute_size(
+            equity=1_000_000, price=2500.0,
+            symbol="RELIANCE", trade_date="2026-03-01",
+            confidence_scale=1.0,
+        )
+        assert result.quantity == 100  # Same as baseline
+
+    def test_half_confidence_reduces_size(self, sizer, mock_atr_vendor):
+        """confidence_scale=0.75 (50% confidence) → 75% of baseline."""
+        result = sizer.compute_size(
+            equity=1_000_000, price=2500.0,
+            symbol="RELIANCE", trade_date="2026-03-01",
+            confidence_scale=0.75,
+        )
+        # risk_amount = 10000 * 0.75 = 7500, qty = 7500/100 = 75
+        assert result.quantity == 75
+
+    def test_zero_confidence_still_trades(self, sizer, mock_atr_vendor):
+        """confidence_scale=0.5 (0% confidence floor) → half size."""
+        result = sizer.compute_size(
+            equity=1_000_000, price=2500.0,
+            symbol="RELIANCE", trade_date="2026-03-01",
+            confidence_scale=0.5,
+        )
+        # risk_amount = 10000 * 0.5 = 5000, qty = 5000/100 = 50
+        assert result.quantity == 50
+
+    def test_confidence_compounds_with_regime(self, sizer, mock_atr_vendor):
+        """confidence_scale * regime_scale compound multiplicatively."""
+        result = sizer.compute_size(
+            equity=1_000_000, price=2500.0,
+            symbol="RELIANCE", trade_date="2026-03-01",
+            regime_scale=0.5, confidence_scale=0.75,
+        )
+        # effective = 0.5 * 1.0 * 0.75 = 0.375
+        # risk = 10000 * 0.375 = 3750, qty = 3750/100 = 37
+        assert result.quantity == 37
+
+    def test_default_confidence_scale_is_neutral(self, sizer, mock_atr_vendor):
+        """Omitting confidence_scale should be identical to baseline."""
+        with_default = sizer.compute_size(
+            equity=1_000_000, price=2500.0,
+            symbol="RELIANCE", trade_date="2026-03-01",
+        )
+        with_explicit = sizer.compute_size(
+            equity=1_000_000, price=2500.0,
+            symbol="RELIANCE", trade_date="2026-03-01",
+            confidence_scale=1.0,
+        )
+        assert with_default.quantity == with_explicit.quantity

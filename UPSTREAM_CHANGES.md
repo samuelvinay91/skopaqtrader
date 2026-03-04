@@ -263,3 +263,17 @@ if onchain_report or defi_report or funding_report:
 **Why:** Debate participants need all analyst data to make informed arguments. Crypto reports are only included when non-empty, so equity trades see identical prompts.
 
 **Backward compatible:** Yes — `state.get("onchain_report", "")` returns empty string for equity trades, `crypto_section` stays empty, prompts unchanged.
+
+---
+
+### Confidence Scoring
+
+#### 34. `tradingagents/agents/managers/risk_manager.py` — Add confidence score deliverable
+
+**What:** Added a third deliverable to the risk manager prompt requesting a numeric confidence score in the format `CONFIDENCE: <0-100>` on the final line of the response.
+
+**Why:** The risk manager's narrative output contained no structured confidence indicator, causing all trade signals to default to 50% confidence. The new format preserves the free-text narrative while appending a parseable score.
+
+**Lines changed:** ~4 lines added to the prompt deliverables section.
+
+**Backward compatible:** Yes — the prompt addition is purely additive. If the LLM ignores it, downstream parsing in `skopaq/graph/skopaq_graph.py` falls back to a debater-agreement heuristic (35–85 range) or the previous default of 50.

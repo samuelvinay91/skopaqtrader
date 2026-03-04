@@ -99,6 +99,7 @@ class SafetyChecker:
         self._check_cool_down(rejections)
         self._check_naked_options(order, rejections)
         self._check_sufficient_funds(order, funds, rejections)
+        self._check_minimum_confidence(signal, rejections)
 
         result = SafetyResult(passed=len(rejections) == 0, rejections=rejections)
 
@@ -135,7 +136,14 @@ class SafetyChecker:
     def _check_position_size(
         self, order: OrderRequest, portfolio_value: float, rejections: list[str],
     ) -> None:
-        """Reject if order exceeds max position % of capital."""
+        """Reject if order exceeds max position % of capital.
+
+        Small-account exemption: buying 1 share (the minimum) is always
+        allowed if the account can afford it, even when the percentage
+        exceeds the limit.  The 15% rule is designed to prevent
+        over-concentration in larger accounts — blocking the only
+        possible trade in a small account defeats its purpose.
+        """
         if portfolio_value <= 0:
             return
         price = order.price or 0
@@ -144,6 +152,14 @@ class SafetyChecker:
         order_value = price * float(order.quantity)
         pct = order_value / portfolio_value
         if pct > self._rules.max_position_pct:
+            # Small-account exemption: allow minimum-qty orders that fit in cash
+            if order.quantity <= 1 and order_value <= portfolio_value:
+                logger.info(
+                    "Position size %.1f%% exceeds %.0f%% limit, but allowing "
+                    "minimum-qty order (small-account exemption)",
+                    pct * 100, self._rules.max_position_pct * 100,
+                )
+                return
             rejections.append(
                 f"Position size {pct:.1%} exceeds max {self._rules.max_position_pct:.0%}"
             )
@@ -339,6 +355,20 @@ class SafetyChecker:
         if required > funds.available_margin:
             rejections.append(
                 f"Insufficient margin: need INR {required:,.0f}, available INR {funds.available_margin:,.0f}"
+            )
+
+    def _check_minimum_confidence(
+        self, signal: Optional[TradingSignal], rejections: list[str],
+    ) -> None:
+        """Reject signals below minimum confidence threshold."""
+        if self._rules.min_confidence_pct <= 0:
+            return  # Gate disabled
+        if signal is None:
+            return
+        if signal.confidence < self._rules.min_confidence_pct:
+            rejections.append(
+                f"Confidence {signal.confidence}% below minimum "
+                f"{self._rules.min_confidence_pct}%"
             )
 
     # ── P&L tracking (called externally after fills) ─────────────────────

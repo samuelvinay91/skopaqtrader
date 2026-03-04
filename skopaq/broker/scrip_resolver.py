@@ -87,3 +87,19 @@ async def resolve_scrip_code(
         )
 
     return _cache[key]
+
+
+async def resolve_security_id(
+    client: INDstocksClient,
+    symbol: str,
+    exchange: str = "NSE",
+) -> str:
+    """Resolve a symbol to its raw security ID (e.g. ``"2885"``).
+
+    Unlike :func:`resolve_scrip_code` which returns ``"NSE_2885"``,
+    this returns just the numeric part needed for the order API's
+    ``security_id`` field.
+    """
+    scrip = await resolve_scrip_code(client, symbol, exchange)
+    # scrip format: "NSE_2885" → extract "2885"
+    return scrip.split("_", 1)[1] if "_" in scrip else scrip

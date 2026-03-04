@@ -10,6 +10,7 @@ Zero modifications to upstream ``tradingagents/`` code.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -279,6 +280,7 @@ class SkopaqTradingGraph:
             risk_state = state.get("risk_debate_state", {})
             if isinstance(risk_state, dict):
                 confidence = _extract_confidence(risk_state)
+                logger.debug("Signal confidence for %s: %d", symbol, confidence)
                 # Judge decision has the richest reasoning
                 judge = risk_state.get("judge_decision", "")
                 if judge and len(str(judge).strip()) > len(action):
@@ -305,11 +307,29 @@ class SkopaqTradingGraph:
 
 
 def _extract_confidence(risk_state: dict[str, Any]) -> int:
-    """Attempt to extract a confidence score from the risk debate state.
+    """Extract a confidence score from the risk debate state.
 
-    Falls back to 50 if no clear signal is found.
+    Extraction priority:
+    1. Parse ``CONFIDENCE: <N>`` from the judge_decision text.
+    2. Check for explicit dict keys (forward-compatible).
+    3. Heuristic: analyse debater agreement direction.
+    4. Fallback: 50 (graceful degradation).
     """
-    # Check for explicit confidence field
+    # --- Priority 1: Parse from judge_decision text ---
+    judge_text = risk_state.get("judge_decision", "")
+    if judge_text:
+        # Normalise: extract_text handles Gemini list-of-dicts format
+        from skopaq.llm import extract_text
+        judge_text = extract_text(judge_text)
+
+        match = re.search(r"(?i)confidence\s*:\s*(\d{1,3})", judge_text)
+        if match:
+            val = int(match.group(1))
+            clamped = max(0, min(100, val))
+            logger.debug("Parsed confidence from judge text: %d (clamped: %d)", val, clamped)
+            return clamped
+
+    # --- Priority 2: Check for explicit dict keys (forward-compatible) ---
     for key in ("confidence", "score", "certainty"):
         if key in risk_state:
             try:
@@ -318,10 +338,43 @@ def _extract_confidence(risk_state: dict[str, Any]) -> int:
             except (ValueError, TypeError):
                 pass
 
-    # Check consensus — if all risk debaters agree, higher confidence
-    messages = risk_state.get("messages", [])
-    if isinstance(messages, list) and len(messages) >= 3:
-        # More messages = more debate = less consensus = lower confidence
-        return max(30, 80 - len(messages) * 5)
+    # --- Priority 3: Heuristic from debater agreement ---
+    count = risk_state.get("count", 0)
+    if count > 0:
+        aggressive = risk_state.get("current_aggressive_response", "")
+        conservative = risk_state.get("current_conservative_response", "")
+        neutral = risk_state.get("current_neutral_response", "")
+        agreement = _estimate_agreement(aggressive, conservative, neutral)
+        heuristic = int(35 + agreement * 50)
+        logger.debug(
+            "Heuristic confidence: %d (agreement=%.2f, rounds=%d)",
+            heuristic, agreement, count,
+        )
+        return heuristic
 
+    # --- Priority 4: Default fallback ---
+    logger.debug("No confidence signal found — using default 50")
     return 50
+
+
+def _estimate_agreement(aggressive: str, conservative: str, neutral: str) -> float:
+    """Estimate how much the three risk debaters agree on direction.
+
+    Returns 0.0–1.0 mapped to confidence 35–85 by the caller.
+    """
+    if not (aggressive and conservative and neutral):
+        return 0.5  # Insufficient data → mid-range
+
+    responses = [aggressive.upper(), conservative.upper(), neutral.upper()]
+    buy_count = sum(1 for r in responses if "BUY" in r and "SELL" not in r)
+    sell_count = sum(1 for r in responses if "SELL" in r and "BUY" not in r)
+    hold_count = sum(1 for r in responses if "HOLD" in r)
+
+    max_agreement = max(buy_count, sell_count, hold_count)
+
+    if max_agreement == 3:
+        return 1.0   # Unanimous
+    elif max_agreement == 2:
+        return 0.6   # Majority
+    else:
+        return 0.3   # Full disagreement
