@@ -385,22 +385,117 @@ def scan(
 
 
 async def _run_scan(max_candidates: int):
-    """Helper to run async scanner."""
+    """Helper to run async scanner with real providers.
+
+    Wires up:
+    - quote_fetcher:  INDstocks batch quotes (equity) or stub (crypto)
+    - llm_screener:   Gemini 3 Flash  (technical screening)
+    - news_screener:  Perplexity Sonar (news-aware screening)
+    - social_screener: Grok            (social sentiment screening)
+    """
+    from langchain_core.messages import HumanMessage
+
     from skopaq.config import SkopaqConfig
+    from skopaq.llm import bridge_env_vars, build_llm_map, extract_text
     from skopaq.scanner import ScannerEngine, Watchlist
 
     config = SkopaqConfig()
 
-    # Crypto mode uses CRYPTO_TOP_20 watchlist instead of NIFTY_50
-    if config.asset_class == "crypto":
+    # Bridge SKOPAQ_ env vars → standard env vars
+    bridge_env_vars(config)
+
+    # Build per-role LLM map
+    llm_map = build_llm_map()
+
+    # Activate semantic cache (saves $$)
+    from skopaq.llm.cache import init_langcache
+    cache = init_langcache(config)
+    if cache:
+        from langchain_core.globals import set_llm_cache
+        set_llm_cache(cache)
+        logger.info("Scanner: semantic cache enabled")
+
+    # ── Quote fetcher ────────────────────────────────────────────────
+    is_crypto = config.asset_class == "crypto"
+
+    if is_crypto:
         from skopaq.broker.crypto_symbols import CRYPTO_TOP_20
         watchlist = Watchlist(symbols=CRYPTO_TOP_20)
+
+        async def quote_fetcher(symbols: list[str]) -> list[dict]:
+            """Crypto stub — no real-time quotes wired yet."""
+            return []
     else:
         watchlist = Watchlist()
 
+        async def quote_fetcher(symbols: list[str]) -> list[dict]:
+            """Batch-fetch INDstocks quotes for equity symbols."""
+            from skopaq.broker.client import INDstocksClient
+            from skopaq.broker.scrip_resolver import resolve_scrip_code
+            from skopaq.broker.token_manager import TokenManager
+
+            token_mgr = TokenManager()
+            async with INDstocksClient(config, token_mgr) as client:
+                # Resolve all symbols → scrip codes (instruments CSV cached 1h)
+                resolved: list[tuple[str, str]] = []
+                for sym in symbols:
+                    try:
+                        code = await resolve_scrip_code(client, sym)
+                        resolved.append((sym, code))
+                    except ValueError:
+                        logger.debug("Scrip resolve failed: %s", sym)
+
+                if not resolved:
+                    return []
+
+                syms, codes = zip(*resolved)
+                raw_quotes = await client.get_quotes(list(codes), symbols=list(syms))
+
+                return [
+                    {
+                        "symbol": q.symbol,
+                        "ltp": q.ltp,
+                        "open": q.open,
+                        "high": q.high,
+                        "low": q.low,
+                        "close": q.close,
+                        "volume": q.volume,
+                    }
+                    for q in raw_quotes
+                ]
+
+    # ── LLM screener factories ───────────────────────────────────────
+
+    async def _invoke_llm(role: str, prompt: str) -> str:
+        """Invoke a LangChain LLM by role and return normalised text."""
+        llm = llm_map.get(role, llm_map.get("_default"))
+        if llm is None:
+            return "[]"
+        msg = HumanMessage(content=prompt)
+        if hasattr(llm, "ainvoke"):
+            response = await llm.ainvoke([msg])
+        else:
+            import asyncio as _aio
+            response = await _aio.to_thread(lambda: llm.invoke([msg]))
+        return extract_text(response.content)
+
+    async def llm_screener(prompt: str) -> str:
+        return await _invoke_llm("market_analyst", prompt)
+
+    async def news_screener(prompt: str) -> str:
+        return await _invoke_llm("news_analyst", prompt)
+
+    async def social_screener(prompt: str) -> str:
+        return await _invoke_llm("social_analyst", prompt)
+
+    # ── Run scanner ──────────────────────────────────────────────────
     scanner = ScannerEngine(
         watchlist=watchlist,
         max_candidates=max_candidates,
+        quote_fetcher=quote_fetcher,
+        llm_screener=llm_screener,
+        news_screener=news_screener,
+        social_screener=social_screener,
     )
     return await scanner.scan_once()
 

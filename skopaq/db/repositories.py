@@ -43,7 +43,8 @@ def _clean_for_insert(record: dict[str, Any]) -> dict[str, Any]:
         if isinstance(v, (UUID, date, datetime)):
             result[k] = str(v)
         elif isinstance(v, Decimal):
-            result[k] = float(v)
+            f = float(v)
+            result[k] = int(f) if f == int(f) else f
         else:
             result[k] = v
     return result
