@@ -14,6 +14,18 @@ Built on [TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apach
 
 </div>
 
+> [!CAUTION]
+> **IMPORTANT LEGAL DISCLAIMER**
+>
+> This software is provided **strictly for educational and research purposes only**. It is **NOT** financial advice, investment advice, or trading advice of any kind.
+>
+> - **No guarantees of profit.** Algorithmic trading involves substantial risk of financial loss. Past performance does not guarantee future results.
+> - **You are solely responsible** for any trades executed using this software, whether in paper or live mode.
+> - **The authors and contributors are not** registered investment advisors, broker-dealers, or financial planners under SEBI, SEC, or any regulatory body.
+> - **Use at your own risk.** By using this software, you acknowledge that you understand the risks of automated trading and accept full responsibility for all outcomes.
+>
+> *If you need financial advice, consult a SEBI-registered investment advisor.*
+
 ---
 
 ## Overview
@@ -42,7 +54,7 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 
 - **Paper → Live pipeline** — Start paper, graduate to live when ready
 
-> **Disclaimer:** This framework is for research and educational purposes. Trading performance varies based on models, data quality, and market conditions. [It is not financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
+> **Reminder:** See the [full disclaimer](#important-legal-disclaimer) at the top. This is a research tool, not a trading recommendation system.
 
 ## 🏗️ Technical Architecture
 
@@ -269,6 +281,9 @@ See [`.env.example`](.env.example) for all configuration options.
 
 ## Usage
 
+> [!WARNING]
+> All trading commands (live or paper) are **at your own risk**. The AI agents may produce incorrect signals. Always verify positions manually and never risk capital you cannot afford to lose.
+
 ### CLI
 
 ```bash
@@ -286,6 +301,7 @@ skopaq trade RELIANCE
 skopaq scan --max-candidates 5
 
 # Autonomous daemon (full session: scan → trade → monitor → close)
+# WARNING: The daemon trades autonomously. Use paper mode until you are confident.
 skopaq daemon --once --paper           # Single paper session, run immediately
 skopaq daemon --dry-run                # Scanner only, print candidates, exit
 skopaq daemon --once --max-trades 1    # Live mode, 1 trade max (requires confirmation)
@@ -405,6 +421,9 @@ python -m pytest --cov=skopaq --cov=tradingagents -v
 
 ## Deployment
 
+> [!WARNING]
+> Deploying autonomous trading to a cloud server means orders will execute **without human supervision**. Start with paper mode, set conservative limits, and monitor logs daily. You are fully responsible for any trades placed by the daemon.
+
 | Service | Config | Purpose |
 |---------|--------|---------|
 | **Railway** (API) | [`railway.toml`](railway.toml) | FastAPI backend server |
@@ -466,3 +485,9 @@ SkopaqTrader is built on the TradingAgents framework. Please reference the origi
 This project is licensed under the [Apache License 2.0](LICENSE).
 
 SkopaqTrader is a derivative work of [TradingAgents](https://github.com/TauricResearch/TradingAgents) by [TauricResearch](https://tauric.ai/), originally released under the Apache License 2.0. All original copyright and attribution notices are retained per the license terms.
+
+---
+
+<div align="center">
+<sub><strong>Disclaimer:</strong> This software is for educational and research purposes only. It does not constitute financial, investment, or trading advice. Trading in financial markets carries substantial risk. The authors accept no liability for losses incurred through the use of this software. See the <a href="#important-legal-disclaimer">full disclaimer</a> at the top of this page.</sub>
+</div>
