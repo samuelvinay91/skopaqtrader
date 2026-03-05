@@ -61,10 +61,10 @@ def display_welcome() -> None:
     content.append(ascii_art, style=BRAND_DIM)
     content.append("\n")
     content.append(
-        "India's first self-evolving AI algorithmic trading platform\n",
+        "AI algorithmic trading platform for Indian equities\n",
         style="bold white",
     )
-    content.append("Powered by INDstocks  ", style=DIM)
+    content.append("Integrates with INDstocks  ", style=DIM)
     content.append("|  ", style=DIM)
     content.append("Built on TradingAgents", style=DIM)
     content.append("\n\n")

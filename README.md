@@ -4,13 +4,13 @@
 
 # SkopaqTrader
 
-**India's first self-evolving AI algorithmic trading platform, powered by INDstocks**
+**An open-source AI algorithmic trading platform for Indian equities**
 
 Built on [TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) by TauricResearch
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776ab?logo=python&logoColor=white)](https://python.org)
-[![LangGraph](https://img.shields.io/badge/LangGraph-powered-00A67E)](https://langchain-ai.github.io/langgraph/)
+[![Built with LangGraph](https://img.shields.io/badge/Built_with-LangGraph-grey)](https://langchain-ai.github.io/langgraph/)
 
 </div>
 
@@ -30,27 +30,27 @@ Built on [TradingAgents](https://github.com/TauricResearch/TradingAgents) (Apach
 
 ## Overview
 
-SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/TradingAgents) multi-agent LLM framework with Indian equity market support, multi-model tiering, broker integration, and a self-evolving execution pipeline.
+SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/TradingAgents) multi-agent LLM framework with Indian equity market support, multi-model tiering, broker integration, and an experience-driven execution pipeline.
 
 **Key capabilities:**
 
-- **Self-Evolving Feedback Loop** — Post-trade reflection node analyzes past trades and injects history into the analyst context, enabling the system to learn from its wins and losses over time.
+- **Post-Trade Reflection Loop** — Reflection node analyzes past trades and injects history into the analyst context, enabling the system to incorporate lessons from wins and losses over time.
 - **Persistent Agent Memory** — BM25-indexed memory store backed by Supabase for long-term strategic recall across all agent roles.
 - **Multi-agent analysis** — Analyst team (market, news, social, fundamentals), bull/bear researchers, risk manager, and trader agent collaborate via LangGraph.
-- **Multi-model tiering** — Per-role LLM assignment: Gemini 3 Flash (fast/cheap), Claude Opus 4.6 (deep reasoning), Grok (social/X), Perplexity Sonar (web-grounded news).
-- **Semantic LLM Caching** — Built-in Redis LangCache provides a **45x speedup** on repeated queries and slashes API costs, with automatic semantic invalidation on memory updates.
+- **Multi-model tiering** — Per-role LLM assignment across multiple providers for cost optimization and capability matching. See the [model tiering table](#multi-model-tiering) below for details.
+- **Semantic LLM Caching** — Built-in Redis LangCache provides significant speedup (up to ~45x in our benchmarks) on repeated queries and reduces API costs, with automatic semantic invalidation on memory updates.
 - **Advanced Risk Management** — Features ATR-based position sizing, India VIX/NIFTY SMA market regime detection, NSE event calendar handling (F&O expiry, RBI policy), and sector concentration limits.
-- **Live INDstocks Algo Trading** — Deep integration with **INDstocks** for seamless execution on Indian equities (NSE/BSE). Start in paper mode, graduate to live when ready.
+- **Live Algo Trading** — Integrates with the INDstocks broker API for execution on Indian equities (NSE/BSE). Start in paper mode, graduate to live when ready.
 - **Confidence-Scored Position Sizing** — The Risk Manager evaluates trades with strict confidence scores (50-100%). Position sizes are dynamically scaled based on this AI confidence level.
 - **Parallel Scanner Engine** — 30-second multi-model screening cycle on the NIFTY 50 watchlist, wired directly to INDstocks batch quotes and 3 LLM screeners (Gemini, Grok, Perplexity) running concurrently.
 - **Safety-First Execution** — Immutable position limits, persistent drawdown tracking, daily loss circuit breakers, and small-account exemptions.
 - **Autonomous Trading Daemon** — Full session orchestrator: PRE_OPEN → SCANNING → ANALYZING → TRADING → MONITORING → CLOSING → REPORTING. Runs unattended on a cron schedule with graceful SIGTERM handling and tighter safety rules.
-- **AI-Powered Position Monitor** — Three-tier exit logic (hard stop-loss, AI sell analyst, EOD safety net) with optional trailing stops and configurable poll intervals.
+- **Three-Tier Position Monitor** — Hard stop-loss, AI sell analyst, and EOD safety net with optional trailing stops and configurable poll intervals.
 - **Min Profit Gate** — Two-layer protection against brokerage-eating-profit: prompt guidance to the sell analyst LLM + hard override in the monitor that blocks sells when net profit (after estimated brokerage) is below threshold.
 - **Crypto Support** — On-chain (Blockchair), DeFi/tokenomics (DeFiLlama/CoinGecko), and funding rate (Binance Futures) analysts activate when `asset_class=crypto`.
 
 <img src="assets/dashboard.png" alt="Skopaq Dashboard" style="max-width: 100%; height: auto;" />
-*Professional, real-time command center for monitoring agent workflows, market scanners, and live INDstocks execution.*
+*Dashboard for monitoring agent workflows, market scanning, and trade execution.*
 
 - **Paper → Live pipeline** — Start paper, graduate to live when ready
 
@@ -72,7 +72,7 @@ graph TD
         Dashboard["Next.js Dashboard"]:::interface
     end
 
-    subgraph CoreSystem["SkopaqTrader Core - LangGraph"]
+    subgraph CoreSystem["SkopaqTrader Core"]
         Orchestrator["SkopaqTradingGraph<br/>System Orchestrator"]:::core
         DataAgents["Data Analysts<br/>Market / News / Social"]:::agent
         ResearchAgents["Researchers<br/>Bull / Bear / Debate"]:::agent
@@ -127,10 +127,10 @@ sequenceDiagram
 
     User->>Orch: Request Analysis (e.g. RELIANCE)
     Orch->>Analysts: Gather Market, News, Social Data
-    Note over Analysts: Gemini 3, Grok, Perplexity<br/>Accelerated by Redis LangCache
+    Note over Analysts: Multiple LLM providers<br/>Accelerated by Redis LangCache
     Analysts-->>Orch: Formatted Data and Sentiment
     Orch->>Research: Generate Bull and Bear Thesis
-    Note over Research: Deep reasoning via Claude Opus
+    Note over Research: Deep reasoning LLM
     Research-->>Orch: Competing Arguments and Debate
     Orch->>Trader: Propose Trading Strategy
     Trader-->>Orch: Draft Order (Buy/Sell/Hold)
@@ -160,7 +160,7 @@ flowchart LR
     S3["3. AI Debate and Decision<br/>Bull vs Bear Arguments"]:::step
     S4["4. Risk and Confidence Check<br/>Score validates position size"]:::step
     S5["5. Execute Trade<br/>Paper or Live via INDstocks"]:::highlight
-    S6["6. Reflect and Learn<br/>System self-evolves from trade"]:::step
+    S6["6. Reflect and Learn<br/>Lessons feed future trades"]:::step
 
     S1 --> S2 --> S3 --> S4 --> S5 -.-> S6
     S6 -. "Feeds next trade" .-> S2
@@ -187,7 +187,7 @@ flowchart TD
     Start(("skopaq scan<br/>NIFTY 50")):::trigger
     INDapi["INDstocks API Batch Quote"]:::data
     CacheCheck{"Redis LangCache<br/>Semantic Check"}:::check
-    CachedData["Return Cached Inference<br/>45x speedup"]:::llm
+    CachedData["Return Cached Inference"]:::llm
 
     Start --> INDapi --> CacheCheck
     CacheCheck -- "Hit" --> CachedData
@@ -479,6 +479,23 @@ SkopaqTrader is built on the TradingAgents framework. Please reference the origi
       url={https://arxiv.org/abs/2412.20138},
 }
 ```
+
+## Trademarks
+
+All product names, logos, and brands mentioned in this project are property of their respective owners. Their use here does not imply endorsement, sponsorship, or affiliation.
+
+- **Gemini** is a trademark of Google LLC.
+- **Claude** is a trademark of Anthropic, PBC.
+- **Grok** is a trademark of xAI Corp.
+- **Perplexity** is a trademark of Perplexity AI, Inc.
+- **LangGraph** and **LangChain** are trademarks of LangChain, Inc.
+- **NIFTY** and **NIFTY 50** are registered trademarks of NSE Indices Limited.
+- **NSE** is a trademark of National Stock Exchange of India Limited.
+- **BSE** is a trademark of BSE Limited.
+- **INDstocks** is a trademark of its respective owner.
+- **Supabase**, **Vercel**, **Railway**, **Upstash**, **Cloudflare**, and **OpenRouter** are trademarks of their respective companies.
+
+All trademarks are used here solely for identification and interoperability purposes.
 
 ## License
 

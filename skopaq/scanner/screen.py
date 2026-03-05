@@ -124,8 +124,8 @@ def build_social_prompt(
 ) -> str:
     """Build a social sentiment screening prompt for Grok.
 
-    Grok has X/Twitter integration — it can detect retail sentiment shifts
-    and trending discussions about stocks.
+    Grok is used for social sentiment analysis — it excels at detecting
+    retail sentiment shifts and trending discussions about stocks.
     """
     return SOCIAL_SCREEN_PROMPT_TEMPLATE.format(
         max_candidates=max_candidates,

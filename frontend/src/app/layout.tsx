@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "SkopaqTrader",
-  description: "India's first self-evolving AI trading platform",
+  description: "AI algorithmic trading platform for Indian equities",
 };
 
 export default function RootLayout({

@@ -4,7 +4,7 @@ This file provides context for AI coding agents working on the SkopaqTrader code
 
 ## Project Overview
 
-India's first self-evolving AI algorithmic trading platform. Built on vendored [TradingAgents v0.2.0](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) with a custom `skopaq/` layer for INDstocks broker integration, multi-model LLM tiering, and an autonomous execution pipeline.
+AI algorithmic trading platform for Indian equities. Built on vendored [TradingAgents v0.2.0](https://github.com/TauricResearch/TradingAgents) (Apache 2.0) with a custom `skopaq/` layer for INDstocks broker integration, multi-model LLM tiering, and an autonomous execution pipeline.
 
 ## Architecture
 

@@ -85,8 +85,8 @@ async def perplexity_news_screener(prompt: str) -> str:
 async def grok_social_screener(prompt: str) -> str:
     """Send social sentiment prompt to Grok via OpenRouter.
 
-    Grok has X/Twitter integration — it can detect retail sentiment shifts
-    and trending discussions about stocks.
+    Grok is used for social sentiment analysis — it excels at detecting
+    retail sentiment shifts and trending discussions about stocks.
     """
     from langchain_openai import ChatOpenAI
 

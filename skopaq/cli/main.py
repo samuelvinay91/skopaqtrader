@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 app = typer.Typer(
     name="skopaq",
-    help="SkopaqTrader — India's first self-evolving AI trading platform.",
+    help="SkopaqTrader — AI algorithmic trading platform for Indian equities.",
     no_args_is_help=True,
 )
 

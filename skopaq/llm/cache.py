@@ -149,7 +149,7 @@ def _namespace_prompt(prompt: str, llm_string: str) -> str:
     3. Append the human message content, truncated to fit within the
        embedding model's 128-token limit.
 
-    The ``[c:]`` content hash is critical for the self-evolving agent
+    The ``[c:]`` content hash is critical for the memory-augmented agent
     memory system: agent memories (past lessons from reflections) are
     injected deep inside the human message.  Without this hash, the
     truncated cache key would be identical before and after learning,

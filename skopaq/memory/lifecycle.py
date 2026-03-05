@@ -7,8 +7,8 @@ When a SELL trade closes a position, this manager:
 4. Triggers upstream reflection with the P&L outcome
 5. Persists updated agent memories via ``MemoryStore.save()``
 
-This is the mechanism that makes agents genuinely self-evolving:
-each closed position generates lessons that improve future decisions.
+This is the mechanism that provides memory-augmented learning:
+each closed position generates lessons that inform future decisions.
 """
 
 from __future__ import annotations
