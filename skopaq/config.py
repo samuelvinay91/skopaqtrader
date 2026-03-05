@@ -91,6 +91,16 @@ class SkopaqConfig(BaseSettings):
     monitor_trailing_stop_enabled: bool = False
     monitor_trailing_stop_pct: float = 0.02       # 2% trail from high-water
 
+    # ── Daemon (autonomous session) ──────────────────────────────────
+    daemon_max_trades_per_session: int = 3          # Max BUY orders per day
+    daemon_max_candidates_to_analyze: int = 5       # Top N scanner picks to analyze
+    daemon_pre_open_minutes: int = 5                # Start N minutes before 9:15
+    daemon_scan_delay_after_open_seconds: int = 60  # Wait for prices to settle
+    daemon_min_profit_threshold_pct: float = 0.5    # Min P&L% for AI sell
+    daemon_min_profit_threshold_inr: float = 150.0   # Min absolute profit (INR, covers ~₹120 brokerage)
+    daemon_session_log_dir: str = "logs/daemon"     # Session log directory
+    daemon_heartbeat_interval_seconds: int = 300    # Heartbeat log interval (5 min)
+
     # ── Regime Detection ──────────────────────────────────────────────
     regime_detection_enabled: bool = False  # Off until tested with live data
 

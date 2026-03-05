@@ -84,6 +84,21 @@ CRYPTO_PAPER_SAFETY_RULES = SafetyRules(
 )
 
 
+# Daemon variant — tighter limits for fully autonomous unattended trading.
+DAEMON_SAFETY_RULES = SafetyRules(
+    max_open_positions=3,             # 3 vs 5: tighter for unattended
+    max_order_value_inr=200_000.0,    # ₹2L vs ₹5L: lower cap
+    max_orders_per_minute=5,          # 5 vs 20: slower pace
+)
+
+# Daemon paper variant — relaxed timing + stop-loss for testing.
+DAEMON_PAPER_SAFETY_RULES = SafetyRules(
+    market_hours_only=False,
+    require_stop_loss=False,
+    max_open_positions=3,
+)
+
+
 # ── Market Hours (IST) ──────────────────────────────────────────────────────
 
 NSE_PRE_OPEN_START = time(9, 0)

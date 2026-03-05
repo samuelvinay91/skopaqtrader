@@ -23,6 +23,8 @@ from skopaq import __version__
 from skopaq.cli.display import (
     display_analyze_result,
     display_analyze_start,
+    display_daemon_report,
+    display_daemon_start,
     display_error,
     display_monitor_ai_decision,
     display_monitor_result,
@@ -640,6 +642,75 @@ async def _run_monitor(config, ai_enabled: bool):
             ai_enabled=ai_enabled,
         )
         return await monitor_instance.run()
+
+
+# ── Daemon ───────────────────────────────────────────────────────────────────
+
+
+@app.command("daemon")
+def daemon(
+    max_trades: int = typer.Option(0, help="Override max trades per session (0 = use config)."),
+    paper: bool = typer.Option(False, "--paper", help="Force paper mode."),
+    once: bool = typer.Option(False, "--once", help="Run immediately without waiting for market open."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Scanner only — print candidates, don't trade."),
+) -> None:
+    """Run the autonomous trading daemon (scan -> trade -> monitor -> close)."""
+    from skopaq.config import SkopaqConfig
+
+    config = SkopaqConfig()
+
+    # CLI overrides
+    if paper:
+        config.trading_mode = "paper"
+    if max_trades > 0:
+        config.daemon_max_trades_per_session = max_trades
+
+    # Double-confirmation gate for LIVE mode — real money at stake
+    if config.trading_mode == "live" and not dry_run:
+        typer.echo(
+            "\n  !!  LIVE DAEMON MODE — autonomous trading with real money.\n"
+            f"     Max trades: {config.daemon_max_trades_per_session}\n"
+            f"     Min profit: {config.daemon_min_profit_threshold_pct}% / "
+            f"{config.daemon_min_profit_threshold_inr:.0f}\n"
+        )
+        if not typer.confirm("  Proceed with LIVE daemon?", default=False):
+            typer.echo("  Aborted.")
+            raise typer.Exit()
+
+    display_daemon_start(config)
+    report = asyncio.run(_run_daemon(config, once=once, dry_run=dry_run))
+    display_daemon_report(report)
+
+
+async def _run_daemon(config, *, once: bool = False, dry_run: bool = False):
+    """Async helper to run the daemon session."""
+    import signal as sig
+
+    from skopaq.execution.daemon import TradingDaemon
+
+    stop_event = asyncio.Event()
+
+    # Graceful shutdown on SIGINT/SIGTERM
+    def _handle_signal(signum, *_):
+        sig_name = sig.Signals(signum).name
+        logger.info("%s received — initiating graceful shutdown...", sig_name)
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for s in (sig.SIGINT, sig.SIGTERM):
+        loop.add_signal_handler(s, _handle_signal, s)
+
+    daemon_instance = TradingDaemon(config, stop_event=stop_event)
+
+    # Wait for market open (unless --once or --dry-run)
+    if not once and not dry_run:
+        await daemon_instance.wait_for_market_open()
+
+    if stop_event.is_set():
+        from skopaq.execution.daemon import DaemonSessionReport
+        return DaemonSessionReport(session_date="cancelled")
+
+    return await daemon_instance.run_session(dry_run=dry_run)
 
 
 # ── Serve ────────────────────────────────────────────────────────────────────

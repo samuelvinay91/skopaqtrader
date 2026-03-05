@@ -74,6 +74,12 @@ DECISION: SELL or HOLD
 CONFIDENCE: <number 0-100>
 REASONING: <1-2 sentence summary>
 
+MINIMUM PROFIT RULE:
+- Do NOT recommend SELL for profit-taking if unrealised P&L is below {min_profit_pct:.1f}%
+- Estimated round-trip brokerage: ₹{est_brokerage:.0f}
+- Only recommend SELL for gains if net profit (after brokerage) justifies the exit
+- This rule does NOT apply to cutting losses — always cut losses promptly
+
 IMPORTANT: Be decisive. If technical signals are mixed but P&L is positive,
 lean towards protecting gains. If P&L is negative and momentum is fading,
 recommend SELL to cut losses early.
@@ -92,6 +98,8 @@ async def analyze_exit(
     quantity: int,
     position_pnl_pct: float,
     trade_date: str,
+    min_profit_threshold_pct: float = 0.0,
+    estimated_round_trip_brokerage: float = 0.0,
 ) -> SellDecision:
     """Run a single-shot LLM analysis to decide whether to exit a position.
 
@@ -107,6 +115,8 @@ async def analyze_exit(
         quantity: Number of shares held.
         position_pnl_pct: Unrealised P&L as percentage.
         trade_date: Current date in YYYY-MM-DD format.
+        min_profit_threshold_pct: Minimum P&L% for profit-taking sells.
+        estimated_round_trip_brokerage: Estimated total brokerage for buy+sell.
 
     Returns:
         SellDecision with action, confidence, and reasoning.
@@ -115,6 +125,7 @@ async def analyze_exit(
         return await _invoke_sell_analyst(
             llm, symbol, entry_price, current_price,
             quantity, position_pnl_pct, trade_date,
+            min_profit_threshold_pct, estimated_round_trip_brokerage,
         )
     except Exception:
         logger.warning(
@@ -135,6 +146,8 @@ async def _invoke_sell_analyst(
     quantity: int,
     position_pnl_pct: float,
     trade_date: str,
+    min_profit_threshold_pct: float = 0.0,
+    estimated_round_trip_brokerage: float = 0.0,
 ) -> SellDecision:
     """Internal: invoke the LLM chain and parse the structured response."""
     tools = [get_stock_data, get_indicators]
@@ -158,6 +171,8 @@ async def _invoke_sell_analyst(
         trade_date=trade_date,
         yf_symbol=yf_symbol,
         tool_names=", ".join(t.name for t in tools),
+        min_profit_pct=min_profit_threshold_pct,
+        est_brokerage=estimated_round_trip_brokerage,
     )
 
     chain = prompt | llm.bind_tools(tools)

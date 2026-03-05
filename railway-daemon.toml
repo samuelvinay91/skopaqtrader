@@ -1,0 +1,16 @@
+# Railway cron service — autonomous trading daemon.
+#
+# Runs at 09:10 IST (03:40 UTC) every weekday.
+# Same Docker image as the API server, different startCommand.
+#
+# Deploy as a separate Railway service in the same project:
+#   railway link → select this service → railway up
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "docker/Dockerfile"
+
+[deploy]
+startCommand = "python -m skopaq.cli.main daemon --once"
+cronSchedule = "40 3 * * 1-5"
+restartPolicyType = "never"

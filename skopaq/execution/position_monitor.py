@@ -103,6 +103,11 @@ class PositionMonitor:
         self._trailing_enabled = config.monitor_trailing_stop_enabled
         self._trailing_pct = config.monitor_trailing_stop_pct
 
+        # Minimum profit gate — prevents selling for tiny gains eaten by brokerage
+        self._min_profit_pct = config.daemon_min_profit_threshold_pct
+        self._min_profit_inr = config.daemon_min_profit_threshold_inr
+        self._est_brokerage = 120.0  # ~₹60 per side for INDstocks (brokerage + GST)
+
     async def run(self) -> MonitorResult:
         """Main monitoring loop.  Returns when all positions are closed,
         the stop event is set (Ctrl+C), or the market closes."""
@@ -158,6 +163,21 @@ class PositionMonitor:
                 if self._ai_enabled and cycle % self._ai_interval == 0:
                     decision = await self._check_ai(pos, ltp, pnl_pct)
                     if decision and decision.action == "SELL":
+                        # Min profit gate: don't sell for tiny gains brokerage eats
+                        if pnl_pct > 0:
+                            gross_profit = (ltp - pos.entry_price) * pos.quantity
+                            net_profit = gross_profit - self._est_brokerage
+                            if (pnl_pct < self._min_profit_pct
+                                    or net_profit < self._min_profit_inr):
+                                logger.info(
+                                    "[%s] AI says SELL but profit too small: "
+                                    "gross=₹%.2f, net=₹%.2f (threshold: %.1f%% / ₹%.0f) "
+                                    "→ overriding to HOLD",
+                                    pos.symbol, gross_profit, net_profit,
+                                    self._min_profit_pct, self._min_profit_inr,
+                                )
+                                continue  # Skip this sell, keep monitoring
+
                         reason = f"AI SELL (confidence={decision.confidence}%): {decision.reasoning}"
                         ok = await self._execute_sell(pos, ltp, reason, result)
                         if ok:
@@ -280,6 +300,8 @@ class PositionMonitor:
             quantity=pos.quantity,
             position_pnl_pct=pnl_pct,
             trade_date=trade_date,
+            min_profit_threshold_pct=self._min_profit_pct,
+            estimated_round_trip_brokerage=self._est_brokerage,
         )
 
         logger.info(

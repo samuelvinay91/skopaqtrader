@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from skopaq.broker.models import ExecutionResult, TradingSignal
     from skopaq.broker.token_manager import TokenHealth
     from skopaq.config import SkopaqConfig
+    from skopaq.execution.daemon import DaemonSessionReport
     from skopaq.execution.position_monitor import MonitorResult
     from skopaq.graph.skopaq_graph import AnalysisResult
     from skopaq.scanner.models import ScannerCandidate
@@ -589,6 +590,118 @@ def display_monitor_result(result: MonitorResult) -> None:
     panel = Panel(
         table,
         title="[bold]Monitor Summary[/bold]",
+        border_style=border,
+        padding=(1, 1),
+    )
+    console.print(panel)
+
+
+# ── Daemon Command ───────────────────────────────────────────────────────────
+
+
+def display_daemon_start(config: SkopaqConfig) -> None:
+    """Show daemon startup configuration panel."""
+    table = Table(
+        show_header=False,
+        box=box.SIMPLE,
+        padding=(0, 2),
+        expand=True,
+    )
+    table.add_column("Key", style="bold", width=18)
+    table.add_column("Value")
+
+    mode = config.trading_mode.upper()
+    mode_style = SUCCESS if mode == "PAPER" else "bold red"
+    table.add_row("Mode", f"[{mode_style}]{mode}[/{mode_style}]")
+    table.add_row("Max Trades", str(config.daemon_max_trades_per_session))
+    table.add_row("Max Candidates", str(config.daemon_max_candidates_to_analyze))
+    table.add_row("Scan Delay", f"{config.daemon_scan_delay_after_open_seconds}s after open")
+    table.add_row(
+        "Min Profit",
+        f"{config.daemon_min_profit_threshold_pct}% / {config.daemon_min_profit_threshold_inr:.0f}",
+    )
+    table.add_row("Hard Stop", f"{config.monitor_hard_stop_pct:.0%}")
+    table.add_row("EOD Exit", f"{config.monitor_eod_exit_minutes_before_close} min before close")
+    table.add_row("AI Monitor", f"{OK}  [bold green]ENABLED[/bold green]")
+
+    panel = Panel(
+        table,
+        title="[bold cyan]Autonomous Daemon[/bold cyan]",
+        border_style=HEADER_BORDER,
+        padding=(1, 1),
+    )
+    console.print(panel)
+    console.print()
+
+
+def display_daemon_report(report: DaemonSessionReport) -> None:
+    """Show end-of-session daemon report."""
+    table = Table(
+        show_header=False,
+        box=box.ROUNDED,
+        padding=(0, 2),
+        expand=True,
+    )
+    table.add_column("Field", style="bold", width=18)
+    table.add_column("Value")
+
+    table.add_row("Session Date", report.session_date)
+    table.add_row("Candidates Scanned", str(report.candidates_scanned))
+    table.add_row("Candidates Analyzed", str(report.candidates_analyzed))
+    table.add_row(
+        "Trades Opened",
+        f"[bold green]{report.trades_opened}[/bold green]",
+    )
+
+    if report.trades_rejected:
+        table.add_row(
+            "Trades Rejected",
+            f"[bold red]{report.trades_rejected}[/bold red]",
+        )
+
+    table.add_row("Holds", str(report.holds))
+    table.add_row(
+        "Sells Executed",
+        f"[bold green]{report.sells_executed}[/bold green]",
+    )
+
+    if report.sells_failed:
+        table.add_row(
+            "Sells Failed",
+            f"[bold red]{report.sells_failed}[/bold red]",
+        )
+
+    pnl_style = SUCCESS if report.gross_pnl >= 0 else ERROR
+    table.add_row(
+        "Gross P&L",
+        f"[{pnl_style}]{report.gross_pnl:,.2f}[/{pnl_style}]",
+    )
+
+    # Phase timings
+    if report.phase_times:
+        timings = []
+        for phase, secs in report.phase_times.items():
+            mins = int(secs // 60)
+            s = int(secs % 60)
+            timings.append(f"{phase}={mins}m{s:02d}s" if mins else f"{phase}={s}s")
+        table.add_row("Phase Timings", f"[{DIM}]{', '.join(timings)}[/{DIM}]")
+
+    total_secs = sum(report.phase_times.values())
+    total_mins = int(total_secs // 60)
+    total_s = int(total_secs % 60)
+    table.add_row("Total Time", f"{total_mins}m {total_s}s")
+
+    if report.errors:
+        for err in report.errors[:5]:
+            table.add_row(
+                "Error",
+                f"[{ERROR}]{err[:100]}[/{ERROR}]",
+            )
+
+    border = STATUS_BORDER if not report.errors else WARNING_BORDER
+    panel = Panel(
+        table,
+        title="[bold]Daemon Session Report[/bold]",
         border_style=border,
         padding=(1, 1),
     )
