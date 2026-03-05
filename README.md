@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/hero_banner.png" alt="SkopaqTrader AI Platform" width="100%" />
+<img src="assets/hero_banner.png" alt="SkopaqTrader AI Platform" style="max-width: 100%; height: auto; object-fit: contain;" />
 
 # SkopaqTrader
 
@@ -22,57 +22,192 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 
 **Key capabilities:**
 
-- **Multi-agent analysis** — Analyst team (market, news, social, fundamentals), bull/bear researchers, risk manager, and trader agent collaborate via LangGraph
-- **Multi-model tiering** — Per-role LLM assignment: Gemini 3 Flash (fast/cheap), Claude Opus 4.6 (deep reasoning), Grok (social/X), Perplexity Sonar (web-grounded news)
-- **INDstocks algo trading** — Deep integration with **INDstocks** for seamless algorithmic trading execution on Indian equities (NSE/BSE). Live and paper trading configurations supported out of the box.
-- **Scanner engine** — 30-second multi-model screening cycle on NIFTY 50 watchlist
-- **Safety-first execution** — Immutable position limits, daily loss circuit breakers, stop-loss requirements
+- **Self-Evolving Feedback Loop** — Post-trade reflection node analyzes past trades and injects history into the analyst context, enabling the system to learn from its wins and losses over time.
+- **Persistent Agent Memory** — BM25-indexed memory store backed by Supabase for long-term strategic recall across all agent roles.
+- **Multi-agent analysis** — Analyst team (market, news, social, fundamentals), bull/bear researchers, risk manager, and trader agent collaborate via LangGraph.
+- **Multi-model tiering** — Per-role LLM assignment: Gemini 3 Flash (fast/cheap), Claude Opus 4.6 (deep reasoning), Grok (social/X), Perplexity Sonar (web-grounded news).
+- **Semantic LLM Caching** — Built-in Redis LangCache provides a **45x speedup** on repeated queries and slashes API costs, with automatic semantic invalidation on memory updates.
+- **Advanced Risk Management** — Features ATR-based position sizing, India VIX/NIFTY SMA market regime detection, NSE event calendar handling (F&O expiry, RBI policy), and sector concentration limits.
+- **Live INDstocks Algo Trading** — Deep integration with **INDstocks** for seamless execution on Indian equities (NSE/BSE). Start in paper mode, graduate to live when ready.
+- **Confidence-Scored Position Sizing** — The Risk Manager evaluates trades with strict confidence scores (50-100%). Position sizes are dynamically scaled based on this AI confidence level.
+- **Parallel Scanner Engine** — 30-second multi-model screening cycle on the NIFTY 50 watchlist, wired directly to INDstocks batch quotes and 3 LLM screeners (Gemini, Grok, Perplexity) running concurrently.
+- **Safety-First Execution** — Immutable position limits, persistent drawdown tracking, daily loss circuit breakers, and small-account exemptions.
+- **Autonomous Trading Daemon** — Full session orchestrator: PRE_OPEN → SCANNING → ANALYZING → TRADING → MONITORING → CLOSING → REPORTING. Runs unattended on a cron schedule with graceful SIGTERM handling and tighter safety rules.
+- **AI-Powered Position Monitor** — Three-tier exit logic (hard stop-loss, AI sell analyst, EOD safety net) with optional trailing stops and configurable poll intervals.
+- **Min Profit Gate** — Two-layer protection against brokerage-eating-profit: prompt guidance to the sell analyst LLM + hard override in the monitor that blocks sells when net profit (after estimated brokerage) is below threshold.
+- **Crypto Support** — On-chain (Blockchair), DeFi/tokenomics (DeFiLlama/CoinGecko), and funding rate (Binance Futures) analysts activate when `asset_class=crypto`.
 
-![Skopaq Dashboard](assets/dashboard.png)
+<img src="assets/dashboard.png" alt="Skopaq Dashboard" style="max-width: 100%; height: auto;" />
 *Professional, real-time command center for monitoring agent workflows, market scanners, and live INDstocks execution.*
 
 - **Paper → Live pipeline** — Start paper, graduate to live when ready
 
 > **Disclaimer:** This framework is for research and educational purposes. Trading performance varies based on models, data quality, and market conditions. [It is not financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
 
-## Architecture
+## 🏗️ Technical Architecture
 
-<img src="assets/architecture.png" alt="Skopaq Trading Architecture" width="100%" />
-<br/>
-<sub>*High-level overview of the SkopaqTrader multi-agent system and its direct connection to the INDstocks execution engine.*</sub>
+```mermaid
+graph TD
+    %% Styling
+    classDef interface fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef core fill:#8b5cf6,stroke:#7c3aed,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef agent fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef execution fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef external fill:#475569,stroke:#334155,stroke-width:2px,color:#fff,rx:8px,ry:8px;
 
-### Agent Workflow
+    subgraph User Interfaces ["📱 User Interfaces"]
+        CLI["💻 CLI Interface"]:::interface
+        API["🔌 FastAPI Backend"]:::interface
+        Dashboard["📊 Next.js Dashboard"]:::interface
+    end
 
-<img src="assets/agent_workflow.png" alt="Agent Workflow" width="100%" />
-<br/>
-<sub>*The flow of data from gathering through multi-agent analysis, risk management, to final execution.*</sub>
+    subgraph Core System ["🧠 SkopaqTrader Core (LangGraph)"]
+        Orchestrator["SkopaqTradingGraph<br>(System Orchestrator)"]:::core
+        
+        subgraph Agents ["🤖 AI Agent Team"]
+            DataAgents["Data Analysts<br>(Market/News/Social)"]:::agent
+            ResearchAgents["Researchers<br>(Bull/Bear/Debate)"]:::agent
+            RiskAgent["Risk Manager<br>(Evaluation)"]:::agent
+            TraderAgent["Trader Agent<br>(Decision)"]:::agent
+        end
+        
+        Orchestrator --> Agents
+    end
 
+    subgraph Execution ["⚡ Execution Pipeline"]
+        Safety["Safety Checker<br>(Circuit Breakers)"]:::execution
+        Router["Order Router<br>(Live/Paper)"]:::execution
+    end
+
+    subgraph Infrastructure ["🌐 Infrastructure & Broker"]
+        INDstocks["INDstocks Broker<br>(NSE/BSE Trading)"]:::external
+        Supabase["Supabase DB<br>(State, History, Auth)"]:::external
+        Redis["Redis (LangCache)<br>(Semantic LLM Caching)"]:::external
+    end
+
+    User Interfaces --> Orchestrator
+    DataAgents --> ResearchAgents
+    ResearchAgents --> RiskAgent
+    RiskAgent -- "Confidence %" --> TraderAgent
+    TraderAgent --> Safety
+    Safety --> Router
+    Router --> INDstocks
+    Orchestrator -.-> Supabase
+    Orchestrator -.-> Redis
+    
+    %% Self-Evolving Feedback Loop
+    Router -. "Trade Result" .-> Orchestrator
+    Orchestrator -. "Reflection & Learning" .-> DataAgents
 ```
-┌─────────────────────────────────────────────────────┐
-│                   SkopaqTrader                       │
-│                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────────┐ │
-│  │ Scanner  │  │  CLI /   │  │   Next.js          │ │
-│  │ Engine   │  │  FastAPI  │  │   Dashboard        │ │
-│  └────┬─────┘  └────┬─────┘  └────────┬──────────┘ │
-│       │              │                  │            │
-│  ┌────▼──────────────▼──────────────────▼──────────┐│
-│  │         SkopaqTradingGraph (Wrapper)             ││
-│  │  ┌─────────────────────────────────────────┐    ││
-│  │  │     TradingAgents (Upstream LangGraph)   │    ││
-│  │  │  Analysts → Researchers → Trader → Risk  │    ││
-│  │  └─────────────────────────────────────────┘    ││
-│  └──────────────────┬──────────────────────────────┘│
-│                     │                                │
-│  ┌──────────────────▼──────────────────────────────┐│
-│  │  Execution Pipeline                              ││
-│  │  SafetyChecker → OrderRouter → Paper/Live Engine ││
-│  └──────────────────┬──────────────────────────────┘│
-│                     │                                │
-│  ┌──────────────────▼──────────────────────────────┐│
-│  │  INDstocks Broker  │  Supabase DB  │  Redis     ││
-│  └─────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────┘
+
+*High-level overview of the SkopaqTrader architecture, connecting the user interfaces to the multi-agent AI team and the INDstocks execution engine.*
+
+### 🤖 AI Agent Workflow
+
+<img src="assets/agent_network.png" alt="Concept: AI Agent Neural Network" style="max-width: 100%; height: auto;" />
+<br/>
+<sub>*Conceptual representation of the high-speed data flow between the AI Analyst agents, debate researchers, and the core routing system.*</sub>
+
+```mermaid
+sequenceDiagram
+    participant User as 👤 User Input
+    participant Orchestrator as 🧠 Orchestrator
+    participant Analysts as 📊 Analyst Agents
+    participant Researchers as 🔬 Researchers
+    participant Risk as 🛡️ Risk Manager
+    participant Trader as 📈 Trader Agent
+    participant INDstocks as 🏦 INDstocks Broker
+
+    User->>Orchestrator: Request Analysis (e.g. RELIANCE)
+    Orchestrator->>Analysts: Gather Market, News, Social Data
+    Note over Analysts: Uses Gemini 3, Grok, Perplexity<br/>(Accelerated by Redis LangCache)
+    Analysts-->>Orchestrator: Formatted Data & Sentiment
+    Orchestrator->>Researchers: Generate Bull & Bear Thesis
+    Note over Researchers: Deep reasoning via Claude Opus
+    Researchers-->>Orchestrator: Competing Arguments & Debate
+    Orchestrator->>Trader: Propose Trading Strategy
+    Trader-->>Orchestrator: Draft Order (Buy/Sell/Hold)
+    Orchestrator->>Risk: Evaluate Draft against Safety Limits
+    Risk-->>Orchestrator: Assign Confidence Score (50-100%)
+    alt Order Approved
+        Orchestrator->>INDstocks: Execute Live/Paper Trade
+        INDstocks-->>Orchestrator: Delivery & Price Confirmation
+        Orchestrator->>Orchestrator: 🧠 Reflection Node (Self-Evolution)
+        Orchestrator-->>User: Trade Success & Report
+    else Order Rejected
+        Orchestrator-->>User: Trade Blocked (Safety Protocol)
+    end
+```
+
+*The step-by-step collaborative workflow of our AI agent team, from data gathering to safe execution.*
+
+### 🚀 Usage Lifecycle (For Beginners)
+
+```mermaid
+flowchart LR
+    classDef step fill:#f3f4f6,stroke:#9ca3af,stroke-width:2px,color:#1f2937,rx:8px,ry:8px;
+    classDef highlight fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a,rx:8px,ry:8px;
+
+    S1["1. Pick a Stock<br>or run the Screener"]:::step
+    S2["2. AI Team Analyzes<br>News, Trends, Fundamentals"]:::step
+    S3["3. AI Debate & Decision<br>Bull vs Bear Arguments"]:::step
+    S4["4. Risk & Confidence Check<br>Score validates position size"]:::step
+    S5["5. Execute Trade<br>Paper or Live via INDstocks"]:::highlight
+    S6["6. Reflect & Learn<br>System self-evolves from trade"]:::step
+
+    S1 --> S2 --> S3 --> S4 --> S5 -.-> S6
+    S6 -. "Feeds next trade" .-> S2
+```
+
+*A simple mental model of how SkopaqTrader operates, making complex algorithmic trading easy to understand.*
+
+### 🔍 Deep-Dive: Scanner Engine & Advanced Risk
+
+<img src="assets/data_scanner.png" alt="Concept: Real-Time Market Scanner" style="max-width: 100%; height: auto;" />
+<br/>
+<sub>*Conceptual UI of the SkopaqTrader scanner engine processing live NIFTY 50 metrics, sentiment scores, and confidence data.*</sub>
+
+The real power of SkopaqTrader lies in its parallel scanner and dynamic risk management logic. When running `skopaq scan`, the system doesn't rely on just one LLM or simple heuristics. It queries multiple models simultaneously while injecting Indian market regime rules.
+
+```mermaid
+flowchart TD
+    %% Styling rules
+    classDef trigger fill:#10b981,stroke:#047857,color:#fff,rx:8px,ry:8px
+    classDef data fill:#3b82f6,stroke:#2563eb,color:#fff,rx:8px,ry:8px
+    classDef llm fill:#8b5cf6,stroke:#7c3aed,color:#fff,rx:8px,ry:8px
+    classDef check fill:#f59e0b,stroke:#d97706,color:#fff,rx:8px,ry:8px
+    classDef memory fill:#475569,stroke:#334155,color:#fff,rx:8px,ry:8px
+
+    Start(("skopaq scan<br>(NIFTY 50)")):::trigger --> INDstocks["INDstocks API Batch Quote"]:::data
+    INDstocks --> CacheCheck{"Redis LangCache<br>(Semantic Check)"}:::check
+    
+    CacheCheck -- Hit --> CachedData["Return Cached Inference (45x speedup)"]:::llm
+    CacheCheck -- Miss --> ParallelScreener["Parallel multi-model screening"]:::llm
+
+    subgraph Parallel Screener ["Parallel Screening Cluster"]
+        Gemini["Gemini 3 Flash<br>(Tech / Fundamentals)"]:::llm
+        Grok["Grok X<br>(Social Sentiment)"]:::llm
+        Perplexity["Perplexity Sonar<br>(Web/News Context)"]:::llm
+    end
+
+    ParallelScreener --> Gemini & Grok & Perplexity
+    
+    Gemini & Grok & Perplexity --> Synthesis["Risk Management & Strategy Synthesis"]:::check
+
+    subgraph Risk Rules ["Advanced Risk Evaluator"]
+        Regime["Detect Regime<br>(VIX/NIFTY SMA)"]:::check
+        Events["Calendar Checks<br>(RBI/F&O Expiry)"]:::check
+        Size["ATR Position Sizing<br>& Concentration Limits"]:::check
+        Regime & Events --> Size
+    end
+
+    Synthesis --> Risk Rules
+    Risk Rules --> Confidence{"Confidence Score<br>> 50% ?"}:::check
+
+    Confidence -- Yes --> EmitTrade("Emit Trade Execution"):::trigger
+    Confidence -- No --> Drop("Discard Candidate"):::memory
+
+    EmitTrade -.-> Supabase["Supabase DB<br>Record Trade & Memory"]:::memory
 ```
 
 ### Multi-Model Tiering
@@ -81,11 +216,15 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 |------------|---------------|----------|
 | Market / Fundamentals Analyst | Gemini 3 Flash | — |
 | Social Analyst | Grok 3 Mini (via OpenRouter) | Gemini 3 Flash |
-| News Analyst | Perplexity Sonar Pro (via OpenRouter) | Gemini 3 Flash |
+| News Analyst | Gemini 3 Flash | — |
 | Research Manager | Claude Opus 4.6 | Gemini 3 Flash |
 | Risk Manager | Claude Opus 4.6 | Gemini 3 Flash |
 | Bull / Bear / Debate Researchers | Gemini 3 Flash | — |
 | Trader | Gemini 3 Flash | — |
+| Sell Analyst | Gemini 3 Flash | — |
+| Scanner Screeners | Gemini 3 Flash, Grok 3 Mini, Perplexity Sonar | (concurrent) |
+
+> **Note:** Perplexity Sonar is used only in the scanner (plain prompts). It does not support tool calling, so it cannot serve as an analyst in the LangGraph agent pipeline.
 
 ## Installation
 
@@ -144,6 +283,14 @@ skopaq trade RELIANCE
 # Run scanner cycle
 skopaq scan --max-candidates 5
 
+# Autonomous daemon (full session: scan → trade → monitor → close)
+skopaq daemon --once --paper           # Single paper session, run immediately
+skopaq daemon --dry-run                # Scanner only, print candidates, exit
+skopaq daemon --once --max-trades 1    # Live mode, 1 trade max (requires confirmation)
+
+# Position monitor (attach to existing open positions)
+skopaq monitor                         # Monitor all open positions until EOD
+
 # Start API server
 skopaq serve --port 8000
 
@@ -189,39 +336,62 @@ print(decision)
 skopaqtrader/
 ├── tradingagents/              # Vendored upstream (TradingAgents v0.2.0)
 │   ├── agents/                 # Analyst, researcher, trader, risk agents
-│   ├── graph/                  # LangGraph orchestration
-│   ├── dataflows/              # Data vendors (yfinance, INDstocks, etc.)
+│   │   ├── analysts/           # Market, news, social, fundamentals + crypto analysts
+│   │   ├── researchers/        # Bull/bear researchers
+│   │   ├── managers/           # Research + risk managers
+│   │   ├── risk_mgmt/          # Aggressive/conservative/neutral debators
+│   │   └── trader/             # Final trade decision agent
+│   ├── graph/                  # LangGraph orchestration + reflection
+│   ├── dataflows/              # Data vendors (yfinance, INDstocks, crypto APIs)
 │   └── llm_clients/            # LLM factory (OpenAI, Google, Anthropic, etc.)
 │
 ├── skopaq/                     # SkopaqTrader extensions
-│   ├── broker/                 # INDstocks REST/WebSocket client
-│   ├── cli/                    # Typer CLI commands
-│   ├── config.py               # Pydantic Settings configuration
-│   ├── constants.py            # Immutable safety rules
-│   ├── db/                     # Supabase integration
-│   ├── execution/              # Order pipeline + safety checker
-│   ├── graph/                  # Upstream wrapper (SkopaqTradingGraph)
-│   ├── llm/                    # Multi-model tiering + env bridge
-│   └── scanner/                # Multi-model market scanner
+│   ├── agents/                 # Sell analyst (AI exit decisions)
+│   ├── api/                    # FastAPI backend server
+│   ├── broker/                 # INDstocks REST/WebSocket + Binance + paper engine
+│   ├── cli/                    # Typer CLI (analyze, trade, scan, daemon, monitor)
+│   ├── db/                     # Supabase client + repositories
+│   ├── execution/              # Executor, safety checker, order router, daemon, monitor
+│   ├── graph/                  # SkopaqTradingGraph (upstream wrapper)
+│   ├── llm/                    # Multi-model tiering, env bridge, semantic cache
+│   ├── memory/                 # BM25-indexed agent memory (Supabase-backed)
+│   ├── risk/                   # ATR sizing, regime detection, drawdown, calendar
+│   ├── scanner/                # Multi-model market scanner engine
+│   ├── config.py               # Pydantic Settings (env_prefix="SKOPAQ_")
+│   └── constants.py            # Immutable safety rules + daemon variants
 │
 ├── frontend/                   # Next.js dashboard (Vercel)
 ├── supabase/                   # Database migrations
 ├── docker/                     # Dockerfile for Railway
-├── tests/                      # Unit + integration tests
-│   ├── unit/
-│   └── integration/
+├── tests/                      # 466 unit + integration tests
+│   ├── unit/                   # Fast tests (no API keys needed)
+│   └── integration/            # Real API calls (requires .env)
 │
-├── UPSTREAM_CHANGES.md         # All modifications to vendored code
+├── CLAUDE.md                   # AI agent project context
+├── UPSTREAM_CHANGES.md         # All modifications to vendored code (34 changes)
 ├── CONTRIBUTING.md             # Contribution guidelines
 ├── pyproject.toml              # Python project config
-├── railway.toml                # Railway deployment config
+├── railway.toml                # Railway API server config
+├── railway-daemon.toml         # Railway daemon cron config
 └── LICENSE                     # Apache 2.0
 ```
 
+## Security
+
+- **No secrets in the repository.** All API keys, tokens, and credentials are loaded from environment variables via `.env` (gitignored). See [`.env.example`](.env.example) for the full list of configurable keys.
+- **INDstocks tokens** are stored locally in `~/.skopaq/token.json` (gitignored) and validated on every daemon session start.
+- **Immutable safety rules** in `skopaq/constants.py` enforce position limits, order value caps, and rate limits that cannot be overridden at runtime.
+- **Daemon safety variants** apply tighter limits for unattended operation (fewer positions, lower order caps, slower pace).
+- **Live trading double-gate** — the `trade` and `daemon` CLI commands require an explicit confirmation prompt before executing real orders.
+
+If you discover a security issue, please report it privately rather than opening a public issue.
+
 ## Testing
 
+The test suite contains **466 unit tests** (no API keys needed) plus integration tests for real broker/LLM calls.
+
 ```bash
-# Unit tests (no API keys needed)
+# Unit tests — fast, no external dependencies
 python -m pytest tests/unit/ -v
 
 # Integration tests (requires .env with real API keys)
@@ -233,29 +403,33 @@ python -m pytest --cov=skopaq --cov=tradingagents -v
 
 ## Deployment
 
-| Service | Purpose |
-|---------|---------|
-| **Railway** | Python backend (FastAPI + scheduler) |
-| **Vercel** | Next.js frontend dashboard |
-| **Supabase** | PostgreSQL database + Auth |
-| **Upstash** | Serverless Redis |
-| **Cloudflare Tunnel** | Static IP for INDstocks API |
+| Service | Config | Purpose |
+|---------|--------|---------|
+| **Railway** (API) | [`railway.toml`](railway.toml) | FastAPI backend server |
+| **Railway** (Daemon) | [`railway-daemon.toml`](railway-daemon.toml) | Autonomous trading cron (09:10 IST, weekdays) |
+| **Vercel** | `frontend/` | Next.js dashboard |
+| **Supabase** | `supabase/` | PostgreSQL + Auth + agent memory |
+| **Upstash** | — | Serverless Redis (semantic LLM cache) |
+| **Cloudflare Tunnel** | — | Static IP for INDstocks API whitelist |
 
-See [`railway.toml`](railway.toml) and [`docker/Dockerfile`](docker/Dockerfile) for backend deployment config.
+See [`docker/Dockerfile`](docker/Dockerfile) for the shared container image used by both Railway services.
 
 ## Upstream Modifications
 
-All changes to the vendored `tradingagents/` directory are documented in [`UPSTREAM_CHANGES.md`](UPSTREAM_CHANGES.md).
+All 34 changes to the vendored `tradingagents/` directory are documented in [`UPSTREAM_CHANGES.md`](UPSTREAM_CHANGES.md).
 
 **Modification philosophy:** Minimal, surgical changes. The upstream graph runs as a black box via `propagate()`. Skopaq wraps it with execution, safety, and multi-model tiering.
 
-Current upstream modifications:
+**Categories of modifications:**
 
-1. `graph/setup.py` — Added `llm_map` support for per-role LLM assignment
-2. `graph/trading_graph.py` — Pass `llm_map` from config to GraphSetup
-3. `dataflows/indstocks.py` — New file: INDstocks data vendor
-4. `dataflows/interface.py` — Register INDstocks in vendor list
-5. `llm_clients/validators.py` — Added Claude 4.6 and Gemini 3 model IDs
+- **Multi-model tiering** — `llm_map` support in `graph/setup.py` and `trading_graph.py`
+- **INDstocks data vendor** — New `dataflows/indstocks.py` + registration in `interface.py`
+- **Parallel analyst execution** — State reducers in `agent_states.py`, fan-out wiring in `setup.py`
+- **Crypto analyst agents** — 7 new files (on-chain, DeFi, funding) + 9 modified debate consumers
+- **Confidence scoring** — Risk manager prompt addition for structured confidence output
+- **Bugfixes** — yfinance symbol suffix handling, comma-separated indicator splitting, `.NS`/`.BO` stripping
+
+**Diff command:** `git diff upstream-v0.2.0..HEAD -- tradingagents/`
 
 ## Contributing
 
