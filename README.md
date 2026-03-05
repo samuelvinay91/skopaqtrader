@@ -48,44 +48,41 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 
 ```mermaid
 graph TD
-    %% Styling
-    classDef interface fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef core fill:#8b5cf6,stroke:#7c3aed,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef agent fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef execution fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff,rx:8px,ry:8px;
-    classDef external fill:#475569,stroke:#334155,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef interface fill:#3b82f6,stroke:#2563eb,stroke-width:2px,color:#fff
+    classDef core fill:#8b5cf6,stroke:#7c3aed,stroke-width:2px,color:#fff
+    classDef agent fill:#10b981,stroke:#059669,stroke-width:2px,color:#fff
+    classDef execution fill:#f59e0b,stroke:#d97706,stroke-width:2px,color:#fff
+    classDef external fill:#475569,stroke:#334155,stroke-width:2px,color:#fff
 
-    subgraph User Interfaces ["📱 User Interfaces"]
-        CLI["💻 CLI Interface"]:::interface
-        API["🔌 FastAPI Backend"]:::interface
-        Dashboard["📊 Next.js Dashboard"]:::interface
+    subgraph UI["User Interfaces"]
+        CLI["CLI Interface"]:::interface
+        API["FastAPI Backend"]:::interface
+        Dashboard["Next.js Dashboard"]:::interface
     end
 
-    subgraph Core System ["🧠 SkopaqTrader Core (LangGraph)"]
-        Orchestrator["SkopaqTradingGraph<br>(System Orchestrator)"]:::core
-        
-        subgraph Agents ["🤖 AI Agent Team"]
-            DataAgents["Data Analysts<br>(Market/News/Social)"]:::agent
-            ResearchAgents["Researchers<br>(Bull/Bear/Debate)"]:::agent
-            RiskAgent["Risk Manager<br>(Evaluation)"]:::agent
-            TraderAgent["Trader Agent<br>(Decision)"]:::agent
-        end
-        
-        Orchestrator --> Agents
+    subgraph CoreSystem["SkopaqTrader Core - LangGraph"]
+        Orchestrator["SkopaqTradingGraph<br/>System Orchestrator"]:::core
+        DataAgents["Data Analysts<br/>Market / News / Social"]:::agent
+        ResearchAgents["Researchers<br/>Bull / Bear / Debate"]:::agent
+        RiskAgent["Risk Manager<br/>Evaluation"]:::agent
+        TraderAgent["Trader Agent<br/>Decision"]:::agent
     end
 
-    subgraph Execution ["⚡ Execution Pipeline"]
-        Safety["Safety Checker<br>(Circuit Breakers)"]:::execution
-        Router["Order Router<br>(Live/Paper)"]:::execution
+    subgraph Exec["Execution Pipeline"]
+        Safety["Safety Checker<br/>Circuit Breakers"]:::execution
+        Router["Order Router<br/>Live / Paper"]:::execution
     end
 
-    subgraph Infrastructure ["🌐 Infrastructure & Broker"]
-        INDstocks["INDstocks Broker<br>(NSE/BSE Trading)"]:::external
-        Supabase["Supabase DB<br>(State, History, Auth)"]:::external
-        Redis["Redis (LangCache)<br>(Semantic LLM Caching)"]:::external
+    subgraph Infra["Infrastructure"]
+        INDstocks["INDstocks Broker<br/>NSE / BSE Trading"]:::external
+        Supabase["Supabase DB<br/>State, History, Auth"]:::external
+        Redis["Redis LangCache<br/>Semantic LLM Caching"]:::external
     end
 
-    User Interfaces --> Orchestrator
+    CLI --> Orchestrator
+    API --> Orchestrator
+    Dashboard --> Orchestrator
+    Orchestrator --> DataAgents
     DataAgents --> ResearchAgents
     ResearchAgents --> RiskAgent
     RiskAgent -- "Confidence %" --> TraderAgent
@@ -94,10 +91,8 @@ graph TD
     Router --> INDstocks
     Orchestrator -.-> Supabase
     Orchestrator -.-> Redis
-    
-    %% Self-Evolving Feedback Loop
     Router -. "Trade Result" .-> Orchestrator
-    Orchestrator -. "Reflection & Learning" .-> DataAgents
+    Orchestrator -. "Reflection" .-> DataAgents
 ```
 
 *High-level overview of the SkopaqTrader architecture, connecting the user interfaces to the multi-agent AI team and the INDstocks execution engine.*
@@ -110,32 +105,32 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-    participant User as 👤 User Input
-    participant Orchestrator as 🧠 Orchestrator
-    participant Analysts as 📊 Analyst Agents
-    participant Researchers as 🔬 Researchers
-    participant Risk as 🛡️ Risk Manager
-    participant Trader as 📈 Trader Agent
-    participant INDstocks as 🏦 INDstocks Broker
+    participant User as User Input
+    participant Orch as Orchestrator
+    participant Analysts as Analyst Agents
+    participant Research as Researchers
+    participant Risk as Risk Manager
+    participant Trader as Trader Agent
+    participant Broker as INDstocks Broker
 
-    User->>Orchestrator: Request Analysis (e.g. RELIANCE)
-    Orchestrator->>Analysts: Gather Market, News, Social Data
-    Note over Analysts: Uses Gemini 3, Grok, Perplexity<br/>(Accelerated by Redis LangCache)
-    Analysts-->>Orchestrator: Formatted Data & Sentiment
-    Orchestrator->>Researchers: Generate Bull & Bear Thesis
-    Note over Researchers: Deep reasoning via Claude Opus
-    Researchers-->>Orchestrator: Competing Arguments & Debate
-    Orchestrator->>Trader: Propose Trading Strategy
-    Trader-->>Orchestrator: Draft Order (Buy/Sell/Hold)
-    Orchestrator->>Risk: Evaluate Draft against Safety Limits
-    Risk-->>Orchestrator: Assign Confidence Score (50-100%)
+    User->>Orch: Request Analysis (e.g. RELIANCE)
+    Orch->>Analysts: Gather Market, News, Social Data
+    Note over Analysts: Gemini 3, Grok, Perplexity<br/>Accelerated by Redis LangCache
+    Analysts-->>Orch: Formatted Data and Sentiment
+    Orch->>Research: Generate Bull and Bear Thesis
+    Note over Research: Deep reasoning via Claude Opus
+    Research-->>Orch: Competing Arguments and Debate
+    Orch->>Trader: Propose Trading Strategy
+    Trader-->>Orch: Draft Order (Buy/Sell/Hold)
+    Orch->>Risk: Evaluate Draft against Safety Limits
+    Risk-->>Orch: Assign Confidence Score (50-100%)
     alt Order Approved
-        Orchestrator->>INDstocks: Execute Live/Paper Trade
-        INDstocks-->>Orchestrator: Delivery & Price Confirmation
-        Orchestrator->>Orchestrator: 🧠 Reflection Node (Self-Evolution)
-        Orchestrator-->>User: Trade Success & Report
+        Orch->>Broker: Execute Live/Paper Trade
+        Broker-->>Orch: Delivery and Price Confirmation
+        Orch->>Orch: Reflection Node (Self-Evolution)
+        Orch-->>User: Trade Success and Report
     else Order Rejected
-        Orchestrator-->>User: Trade Blocked (Safety Protocol)
+        Orch-->>User: Trade Blocked (Safety Protocol)
     end
 ```
 
@@ -145,15 +140,15 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    classDef step fill:#f3f4f6,stroke:#9ca3af,stroke-width:2px,color:#1f2937,rx:8px,ry:8px;
-    classDef highlight fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a,rx:8px,ry:8px;
+    classDef step fill:#f3f4f6,stroke:#9ca3af,stroke-width:2px,color:#1f2937
+    classDef highlight fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a
 
-    S1["1. Pick a Stock<br>or run the Screener"]:::step
-    S2["2. AI Team Analyzes<br>News, Trends, Fundamentals"]:::step
-    S3["3. AI Debate & Decision<br>Bull vs Bear Arguments"]:::step
-    S4["4. Risk & Confidence Check<br>Score validates position size"]:::step
-    S5["5. Execute Trade<br>Paper or Live via INDstocks"]:::highlight
-    S6["6. Reflect & Learn<br>System self-evolves from trade"]:::step
+    S1["1. Pick a Stock<br/>or run the Screener"]:::step
+    S2["2. AI Team Analyzes<br/>News, Trends, Fundamentals"]:::step
+    S3["3. AI Debate and Decision<br/>Bull vs Bear Arguments"]:::step
+    S4["4. Risk and Confidence Check<br/>Score validates position size"]:::step
+    S5["5. Execute Trade<br/>Paper or Live via INDstocks"]:::highlight
+    S6["6. Reflect and Learn<br/>System self-evolves from trade"]:::step
 
     S1 --> S2 --> S3 --> S4 --> S5 -.-> S6
     S6 -. "Feeds next trade" .-> S2
@@ -171,43 +166,50 @@ The real power of SkopaqTrader lies in its parallel scanner and dynamic risk man
 
 ```mermaid
 flowchart TD
-    %% Styling rules
-    classDef trigger fill:#10b981,stroke:#047857,color:#fff,rx:8px,ry:8px
-    classDef data fill:#3b82f6,stroke:#2563eb,color:#fff,rx:8px,ry:8px
-    classDef llm fill:#8b5cf6,stroke:#7c3aed,color:#fff,rx:8px,ry:8px
-    classDef check fill:#f59e0b,stroke:#d97706,color:#fff,rx:8px,ry:8px
-    classDef memory fill:#475569,stroke:#334155,color:#fff,rx:8px,ry:8px
+    classDef trigger fill:#10b981,stroke:#047857,color:#fff
+    classDef data fill:#3b82f6,stroke:#2563eb,color:#fff
+    classDef llm fill:#8b5cf6,stroke:#7c3aed,color:#fff
+    classDef check fill:#f59e0b,stroke:#d97706,color:#fff
+    classDef memory fill:#475569,stroke:#334155,color:#fff
 
-    Start(("skopaq scan<br>(NIFTY 50)")):::trigger --> INDstocks["INDstocks API Batch Quote"]:::data
-    INDstocks --> CacheCheck{"Redis LangCache<br>(Semantic Check)"}:::check
-    
-    CacheCheck -- Hit --> CachedData["Return Cached Inference (45x speedup)"]:::llm
-    CacheCheck -- Miss --> ParallelScreener["Parallel multi-model screening"]:::llm
+    Start(("skopaq scan<br/>NIFTY 50")):::trigger
+    INDapi["INDstocks API Batch Quote"]:::data
+    CacheCheck{"Redis LangCache<br/>Semantic Check"}:::check
+    CachedData["Return Cached Inference<br/>45x speedup"]:::llm
 
-    subgraph Parallel Screener ["Parallel Screening Cluster"]
-        Gemini["Gemini 3 Flash<br>(Tech / Fundamentals)"]:::llm
-        Grok["Grok X<br>(Social Sentiment)"]:::llm
-        Perplexity["Perplexity Sonar<br>(Web/News Context)"]:::llm
+    Start --> INDapi --> CacheCheck
+    CacheCheck -- "Hit" --> CachedData
+    CacheCheck -- "Miss" --> Gemini
+
+    subgraph Screeners["Parallel Screening Cluster"]
+        Gemini["Gemini 3 Flash<br/>Tech / Fundamentals"]:::llm
+        Grok["Grok 3 Mini<br/>Social Sentiment"]:::llm
+        Perplexity["Perplexity Sonar<br/>Web / News Context"]:::llm
     end
 
-    ParallelScreener --> Gemini & Grok & Perplexity
-    
-    Gemini & Grok & Perplexity --> Synthesis["Risk Management & Strategy Synthesis"]:::check
+    CacheCheck -- "Miss" --> Grok
+    CacheCheck -- "Miss" --> Perplexity
 
-    subgraph Risk Rules ["Advanced Risk Evaluator"]
-        Regime["Detect Regime<br>(VIX/NIFTY SMA)"]:::check
-        Events["Calendar Checks<br>(RBI/F&O Expiry)"]:::check
-        Size["ATR Position Sizing<br>& Concentration Limits"]:::check
-        Regime & Events --> Size
+    Gemini --> Synthesis["Risk Management<br/>Strategy Synthesis"]:::check
+    Grok --> Synthesis
+    Perplexity --> Synthesis
+
+    subgraph RiskEval["Advanced Risk Evaluator"]
+        Regime["Detect Regime<br/>VIX / NIFTY SMA"]:::check
+        Events["Calendar Checks<br/>RBI / F&O Expiry"]:::check
+        Size["ATR Position Sizing<br/>Concentration Limits"]:::check
     end
 
-    Synthesis --> Risk Rules
-    Risk Rules --> Confidence{"Confidence Score<br>> 50% ?"}:::check
+    Synthesis --> Regime
+    Synthesis --> Events
+    Regime --> Size
+    Events --> Size
+    Size --> Confidence{"Confidence Score<br/>above 50% ?"}:::check
 
-    Confidence -- Yes --> EmitTrade("Emit Trade Execution"):::trigger
-    Confidence -- No --> Drop("Discard Candidate"):::memory
+    Confidence -- "Yes" --> EmitTrade("Emit Trade Execution"):::trigger
+    Confidence -- "No" --> Drop("Discard Candidate"):::memory
 
-    EmitTrade -.-> Supabase["Supabase DB<br>Record Trade & Memory"]:::memory
+    EmitTrade -.-> SupaDB["Supabase DB<br/>Record Trade and Memory"]:::memory
 ```
 
 ### Multi-Model Tiering
