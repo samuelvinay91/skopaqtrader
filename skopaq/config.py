@@ -72,12 +72,12 @@ class SkopaqConfig(BaseSettings):
 
     # ── Risk-Adjusted Position Sizing ─────────────────────────────────
     position_sizing_enabled: bool = True
-    risk_per_trade_pct: float = 0.01     # 1% of equity per trade
-    atr_multiplier: float = 2.0          # Stop distance in ATR units
-    atr_period: int = 14                 # ATR lookback period
+    risk_per_trade_pct: float = 0.01  # 1% of equity per trade
+    atr_multiplier: float = 2.0  # Stop distance in ATR units
+    atr_period: int = 14  # ATR lookback period
 
     # ── Confidence Gating ─────────────────────────────────────────────
-    min_confidence_pct: int = 0            # 0 = disabled; e.g. 40 to reject <40%
+    min_confidence_pct: int = 0  # 0 = disabled; e.g. 40 to reject <40%
     confidence_sizing_enabled: bool = True  # Scale position size by confidence
 
     # ── Sector Concentration ──────────────────────────────────────────
@@ -85,21 +85,23 @@ class SkopaqConfig(BaseSettings):
 
     # ── Position Monitor ─────────────────────────────────────────────
     monitor_poll_interval_seconds: int = 10
-    monitor_hard_stop_pct: float = 0.04           # 4% hard stop (safety tier)
+    monitor_hard_stop_pct: float = 0.04  # 4% hard stop (safety tier)
     monitor_eod_exit_minutes_before_close: int = 10  # sell at 15:20 IST
-    monitor_ai_interval_cycles: int = 6           # AI every 6 polls (~60s)
+    monitor_ai_interval_cycles: int = 6  # AI every 6 polls (~60s)
     monitor_trailing_stop_enabled: bool = False
-    monitor_trailing_stop_pct: float = 0.02       # 2% trail from high-water
+    monitor_trailing_stop_pct: float = 0.02  # 2% trail from high-water
 
     # ── Daemon (autonomous session) ──────────────────────────────────
-    daemon_max_trades_per_session: int = 3          # Max BUY orders per day
-    daemon_max_candidates_to_analyze: int = 5       # Top N scanner picks to analyze
-    daemon_pre_open_minutes: int = 5                # Start N minutes before 9:15
+    daemon_max_trades_per_session: int = 3  # Max BUY orders per day
+    daemon_max_candidates_to_analyze: int = 5  # Top N scanner picks to analyze
+    daemon_pre_open_minutes: int = 5  # Start N minutes before 9:15
     daemon_scan_delay_after_open_seconds: int = 60  # Wait for prices to settle
-    daemon_min_profit_threshold_pct: float = 0.5    # Min P&L% for AI sell
-    daemon_min_profit_threshold_inr: float = 150.0   # Min absolute profit (INR, covers ~₹120 brokerage)
-    daemon_session_log_dir: str = "logs/daemon"     # Session log directory
-    daemon_heartbeat_interval_seconds: int = 300    # Heartbeat log interval (5 min)
+    daemon_min_profit_threshold_pct: float = 0.5  # Min P&L% for AI sell
+    daemon_min_profit_threshold_inr: float = (
+        150.0  # Min absolute profit (INR, covers ~₹120 brokerage)
+    )
+    daemon_session_log_dir: str = "logs/daemon"  # Session log directory
+    daemon_heartbeat_interval_seconds: int = 300  # Heartbeat log interval (5 min)
 
     # ── Regime Detection ──────────────────────────────────────────────
     regime_detection_enabled: bool = False  # Off until tested with live data
@@ -116,5 +118,22 @@ class SkopaqConfig(BaseSettings):
     crypto_quote_currency: str = "USDT"
     binance_base_url: str = "https://api.binance.com"
 
-    # ── Logging ─────────────────────────────────────────────────────────
+    # ── Crypto Exchange (Live Trading) ──────────────────────────────────────
+    binance_api_key: SecretStr = SecretStr("")
+    binance_api_secret: SecretStr = SecretStr("")
+    binance_testnet: bool = True  # Default to testnet for safety
+
+    # ── Multi-Exchange Support ──────────────────────────────────────────────
+    preferred_exchange: str = "binance"  # binance, coinbase, kraken (future)
+
+    # ── Blockchain / On-Chain ────────────────────────────────────────────────
+    whale_alert_threshold_usd: int = 100000  # $100K min for whale alerts
+    gas_alert_enabled: bool = False
+    gas_alert_threshold_gwei: float = 100.0  # Alert when gas exceeds this
+
+    # ── WebSocket ───────────────────────────────────────────────────────────
+    ws_reconnect_enabled: bool = True
+    ws_reconnect_delay_seconds: float = 5.0
+
+    # ── Logging ─────────────────────────────────────────────────────────────
     log_level: str = "INFO"

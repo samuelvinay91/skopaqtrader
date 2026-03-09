@@ -48,6 +48,7 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 - **Three-Tier Position Monitor** — Hard stop-loss, AI sell analyst, and EOD safety net with optional trailing stops and configurable poll intervals.
 - **Min Profit Gate** — Two-layer protection against brokerage-eating-profit: prompt guidance to the sell analyst LLM + hard override in the monitor that blocks sells when net profit (after estimated brokerage) is below threshold.
 - **Crypto Support** — On-chain (Blockchair), DeFi/tokenomics (DeFiLlama/CoinGecko), and funding rate (Binance Futures) analysts activate when `asset_class=crypto`.
+- **Blockchain Infrastructure** — Live Binance trading, WebSocket real-time feeds, gas oracles (ETH/Polygon/Arbitrum/Optimism), whale transaction alerts, and multi-exchange abstraction layer.
 
 <img src="assets/dashboard.png" alt="Skopaq Dashboard" style="max-width: 100%; height: auto;" />
 *Dashboard for monitoring agent workflows, market scanning, and trade execution.*
@@ -240,6 +241,44 @@ flowchart TD
 
 > **Note:** Perplexity Sonar is used only in the scanner (plain prompts). It does not support tool calling, so it cannot serve as an analyst in the LangGraph agent pipeline.
 
+### Blockchain Infrastructure
+
+SkopaqTrader includes comprehensive blockchain infrastructure for crypto trading:
+
+| Feature | Module | Description |
+|---------|--------|-------------|
+| **Live Trading** | `skopaq/broker/binance_auth.py` | Authenticated Binance API for spot trading with API keys |
+| **Real-Time Feeds** | `skopaq/broker/binance_ws.py` | WebSocket streams for ticker, trades, order book, klines |
+| **Gas Oracle** | `skopaq/blockchain/gas.py` | ETH, Polygon, Arbitrum, Optimism gas prices + tx cost estimates |
+| **Whale Alerts** | `skopaq/blockchain/whales.py` | Large transaction monitoring for BTC, ETH, SOL |
+| **Multi-Exchange** | `skopaq/broker/exchange.py` | Unified abstraction layer (Binance, Coinbase, Kraken) |
+
+```python
+# Live Binance trading
+from skopaq.broker import BinanceAuthClient
+
+async with BinanceAuthClient(api_key="...", api_secret="...") as client:
+    await client.place_order("BTCUSDT", "BUY", 0.001, 50000.0)
+
+# Real-time price via WebSocket
+from skopaq.broker import BinanceWS
+
+ws = BinanceWS()
+async for ticker in ws.ticker_stream("BTCUSDT"):
+    print(f"BTC: ${ticker.price}")
+
+# Gas oracle
+from skopaq.blockchain import get_gas_price, get_gas_estimate
+
+gas = await get_gas_price("ETH")
+estimate = await get_gas_estimate("ETH", "USDT transfer")
+
+# Whale alerts
+from skopaq.blockchain import check_whale_alerts
+
+alerts = await check_whale_alerts("ETH", min_value_usd=100000)
+```
+
 ## Installation
 
 ### Prerequisites
@@ -366,6 +405,7 @@ skopaqtrader/
 ├── skopaq/                     # SkopaqTrader extensions
 │   ├── agents/                 # Sell analyst (AI exit decisions)
 │   ├── api/                    # FastAPI backend server
+│   ├── blockchain/             # Gas oracle, whale alerts
 │   ├── broker/                 # INDstocks REST/WebSocket + Binance + paper engine
 │   ├── cli/                    # Typer CLI (analyze, trade, scan, daemon, monitor)
 │   ├── db/                     # Supabase client + repositories
