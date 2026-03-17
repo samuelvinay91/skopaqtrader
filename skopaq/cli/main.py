@@ -651,8 +651,10 @@ async def _run_monitor(config, ai_enabled: bool):
 def daemon(
     max_trades: int = typer.Option(0, help="Override max trades per session (0 = use config)."),
     paper: bool = typer.Option(False, "--paper", help="Force paper mode."),
+    live: bool = typer.Option(False, "--live", help="Force live mode (real orders on INDstocks)."),
     once: bool = typer.Option(False, "--once", help="Run immediately without waiting for market open."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Scanner only — print candidates, don't trade."),
+    confirm_live: bool = typer.Option(False, "--confirm-live", help="Skip interactive confirmation for live mode (for cron/CI)."),
 ) -> None:
     """Run the autonomous trading daemon (scan -> trade -> monitor -> close)."""
     from skopaq.config import SkopaqConfig
@@ -662,6 +664,8 @@ def daemon(
     # CLI overrides
     if paper:
         config.trading_mode = "paper"
+    if live:
+        config.trading_mode = "live"
     if max_trades > 0:
         config.daemon_max_trades_per_session = max_trades
 
@@ -673,9 +677,10 @@ def daemon(
             f"     Min profit: {config.daemon_min_profit_threshold_pct}% / "
             f"{config.daemon_min_profit_threshold_inr:.0f}\n"
         )
-        if not typer.confirm("  Proceed with LIVE daemon?", default=False):
-            typer.echo("  Aborted.")
-            raise typer.Exit()
+        if not confirm_live:
+            if not typer.confirm("  Proceed with LIVE daemon?", default=False):
+                typer.echo("  Aborted.")
+                raise typer.Exit()
 
     display_daemon_start(config)
     report = asyncio.run(_run_daemon(config, once=once, dry_run=dry_run))
