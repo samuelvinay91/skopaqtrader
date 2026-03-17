@@ -158,6 +158,10 @@ class Executor:
         """Compute ATR-based position size and mutate the signal in place.
 
         Overrides signal.quantity and signal.stop_loss with risk-adjusted values.
+        After computing the raw ATR-based size, caps the quantity to respect
+        safety limits (max lots, max position %, max order value) so the
+        downstream SafetyChecker won't reject an otherwise valid signal.
+
         Falls back gracefully if ATR data is unavailable.
         """
         try:
@@ -174,14 +178,29 @@ class Executor:
                 confidence_scale=confidence_scale,
             )
 
+            # Cap quantity to respect safety limits
+            capped_qty = self._cap_quantity(
+                size.quantity, signal.entry_price, equity,
+            )
+
             # Mutate signal with computed values
-            signal.quantity = size.quantity
+            signal.quantity = capped_qty
             signal.stop_loss = size.stop_loss
+
+            if capped_qty < size.quantity:
+                logger.info(
+                    "Position capped %s: %d → %d shares (safety limits: "
+                    "max_lots=%d, max_position=%.0f%%, max_order=₹%.0f)",
+                    signal.symbol, size.quantity, capped_qty,
+                    self._safety._rules.max_lots_per_position,
+                    self._safety._rules.max_position_pct * 100,
+                    self._safety._rules.max_order_value_inr,
+                )
 
             logger.info(
                 "Position sized %s: qty=%d, stop=%.2f, risk=%.0f INR, "
                 "ATR=%.2f (%s), regime=%.1f, calendar=%.1f, confidence=%.2f",
-                signal.symbol, size.quantity, size.stop_loss, size.risk_amount,
+                signal.symbol, capped_qty, size.stop_loss, size.risk_amount,
                 size.atr, size.atr_source, regime_scale, calendar_scale,
                 confidence_scale,
             )
@@ -227,6 +246,37 @@ class Executor:
             product=Product.CNC,
             tag=f"skopaq-{signal.confidence}",
         )
+
+    def _cap_quantity(self, raw_qty: int, price: float, equity: float) -> int:
+        """Cap raw ATR-computed quantity to respect safety limits.
+
+        Applies three caps (takes the minimum):
+        1. max_lots_per_position — absolute share limit per trade
+        2. max_position_pct — order value as % of portfolio
+        3. max_order_value_inr — absolute order value cap
+
+        Returns at least 1 share.
+        """
+        import math
+
+        rules = self._safety._rules
+        qty = raw_qty
+
+        # Cap 1: max lots per position
+        qty = min(qty, rules.max_lots_per_position)
+
+        # Cap 2: max position % of portfolio
+        if price > 0 and equity > 0:
+            max_value_by_pct = equity * rules.max_position_pct
+            max_qty_by_pct = math.floor(max_value_by_pct / price)
+            qty = min(qty, max_qty_by_pct)
+
+        # Cap 3: max absolute order value
+        if price > 0:
+            max_qty_by_value = math.floor(rules.max_order_value_inr / price)
+            qty = min(qty, max_qty_by_value)
+
+        return max(1, qty)
 
     @staticmethod
     def _fetch_current_price(symbol: str) -> Optional[float]:
