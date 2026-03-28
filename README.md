@@ -335,10 +335,16 @@ skopaq status
 skopaq analyze RELIANCE
 skopaq analyze TATAMOTORS --date 2026-02-28
 
-# Analyze + execute (paper mode by default)
+# Trade a specific stock (full lifecycle: analyze + trade + monitor + close)
 skopaq trade RELIANCE
 
-# Run scanner cycle
+# Auto-discover and trade (scan NIFTY 50 → pick best → trade → monitor)
+skopaq trade                           # Best single pick
+skopaq trade --top 3                   # Trade top 3 candidates
+skopaq trade --watchlist "RELIANCE,TCS,INFY"  # Scan only these symbols
+skopaq trade --no-monitor              # Skip position monitoring
+
+# Run scanner cycle (no execution)
 skopaq scan --max-candidates 5
 
 # Autonomous daemon (full session: scan → trade → monitor → close)

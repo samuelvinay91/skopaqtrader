@@ -293,10 +293,22 @@ async def _run_analyze(symbol: str, trade_date: str):
 
 @app.command("trade")
 def trade(
-    symbol: str = typer.Argument(..., help="Stock symbol to trade (e.g., RELIANCE)."),
+    symbol: str = typer.Argument(None, help="Stock symbol (e.g., RELIANCE). Omit to auto-scan."),
     date: str = typer.Option("", help="Trade date (YYYY-MM-DD). Defaults to today."),
+    top: int = typer.Option(1, "--top", help="Number of candidates to trade (when auto-scanning)."),
+    watchlist: str = typer.Option("", "--watchlist", help="Comma-separated symbols to scan (instead of NIFTY 50)."),
+    no_monitor: bool = typer.Option(False, "--no-monitor", help="Skip position monitoring after trade."),
 ) -> None:
-    """Analyze and execute a trade for a symbol."""
+    """Analyze and execute trades.
+
+    With a symbol:   skopaq trade RELIANCE      (analyze + trade that symbol)
+    Without symbol:  skopaq trade               (auto-scan → trade best pick)
+    Multiple:        skopaq trade --top 3        (scan → trade top 3 candidates)
+    Custom list:     skopaq trade --watchlist "RELIANCE,TCS,INFY"
+
+    In paper mode, the full lifecycle runs automatically:
+    scan → analyze → trade → monitor → close → report.
+    """
     if not date:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -305,22 +317,48 @@ def trade(
 
     # Double-confirmation gate for LIVE mode — real money at stake
     if config.trading_mode == "live":
+        target = symbol or f"auto-scan (top {top})"
         typer.echo(
-            "\n  ⚠  LIVE TRADING MODE — real orders will be placed on INDstocks.\n"
-            f"     Symbol: {symbol}    Date: {date}\n"
+            f"\n  !!  LIVE TRADING MODE — real orders will be placed.\n"
+            f"     Broker: {config.broker}\n"
+            f"     Target: {target}    Date: {date}\n"
         )
         if not typer.confirm("  Proceed with LIVE execution?", default=False):
             typer.echo("  Aborted.")
             raise typer.Exit()
 
-    display_trade_start(symbol, date, config.trading_mode)
-    result = asyncio.run(_run_trade(symbol, date))
+    if symbol:
+        # Explicit symbol — single trade flow
+        display_trade_start(symbol, date, config.trading_mode)
+        result = asyncio.run(_run_trade_full(
+            symbols=[symbol],
+            trade_date=date,
+            monitor=not no_monitor,
+        ))
+    else:
+        # Auto-scan → trade top N candidates
+        wl = [s.strip() for s in watchlist.split(",") if s.strip()] if watchlist else None
+        typer.echo(
+            f"\n  Auto-scan mode: finding top {top} candidate(s)"
+            + (f" from {wl}" if wl else " from NIFTY 50")
+            + f"  [{config.trading_mode}]\n"
+        )
+        result = asyncio.run(_run_trade_full(
+            symbols=None,
+            trade_date=date,
+            max_candidates=top,
+            custom_watchlist=wl,
+            monitor=not no_monitor,
+        ))
 
-    if result.error:
+    # Display results
+    if isinstance(result, dict) and "report" in result:
+        display_daemon_report(result["report"])
+    elif hasattr(result, "error") and result.error:
         display_error(result.error)
         raise typer.Exit(code=1)
-
-    display_trade_result(result)
+    elif hasattr(result, "signal"):
+        display_trade_result(result)
 
 
 async def _run_trade(symbol: str, trade_date: str):
@@ -451,6 +489,295 @@ async def _run_trade(symbol: str, trade_date: str):
         await _run_lifecycle(config, graph, memory_store, result)
 
     return result
+
+
+async def _run_trade_full(
+    symbols: list[str] | None,
+    trade_date: str,
+    max_candidates: int = 1,
+    custom_watchlist: list[str] | None = None,
+    monitor: bool = True,
+) -> dict:
+    """Full-lifecycle trade: scan → analyze → trade → monitor → close → report.
+
+    When ``symbols`` is provided, skips the scanner and trades those symbols.
+    When ``symbols`` is None, runs the scanner to discover candidates.
+
+    In paper mode, the full cycle runs including position monitoring.
+    In live mode, monitoring is optional (controlled by ``monitor`` flag).
+
+    Returns a dict with ``{"report": DaemonSessionReport}`` for the CLI
+    to display, or a single AnalysisResult if only one symbol was traded.
+    """
+    import signal as sig
+
+    from skopaq.broker.market_data import MarketDataProvider
+    from skopaq.broker.paper_engine import PaperEngine
+    from skopaq.config import SkopaqConfig
+    from skopaq.constants import (
+        CRYPTO_PAPER_SAFETY_RULES, CRYPTO_SAFETY_RULES,
+        PAPER_SAFETY_RULES, SAFETY_RULES,
+    )
+    from skopaq.execution.daemon import DaemonSessionReport
+    from skopaq.execution.executor import Executor
+    from skopaq.execution.order_router import OrderRouter
+    from skopaq.execution.safety_checker import SafetyChecker
+    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
+    from skopaq.risk.position_sizer import PositionSizer
+
+    config = SkopaqConfig()
+    is_crypto = config.asset_class == "crypto"
+    is_paper = config.trading_mode == "paper"
+
+    report = DaemonSessionReport(
+        session_date=trade_date,
+    )
+
+    # ── 1. Market data + paper engine ────────────────────────────────
+    market_data = MarketDataProvider(config)
+
+    if is_crypto:
+        paper = PaperEngine(
+            initial_capital=config.initial_paper_capital,
+            brokerage_pct=0.001,
+            currency_label="USDT",
+            market_data=market_data,
+        )
+    else:
+        paper = PaperEngine(
+            initial_capital=config.initial_paper_capital,
+            market_data=market_data,
+        )
+
+    if is_crypto:
+        rules = CRYPTO_PAPER_SAFETY_RULES if is_paper else CRYPTO_SAFETY_RULES
+    else:
+        rules = PAPER_SAFETY_RULES if is_paper else SAFETY_RULES
+
+    # ── 2. Broker client ────────────────────────────────────────────
+    live_client = None
+    broker_client = None
+    if config.trading_mode == "live":
+        live_client = _create_live_client(config)
+        broker_client = live_client
+    else:
+        try:
+            broker_client = _create_live_client(config)
+        except Exception:
+            logger.info("No broker token — using yfinance for market data")
+
+    router = OrderRouter(config, paper, live_client=live_client)
+    safety = SafetyChecker(
+        rules=rules,
+        max_sector_concentration_pct=config.max_sector_concentration_pct,
+    )
+    sizer = None
+    if config.position_sizing_enabled:
+        sizer = PositionSizer(
+            risk_per_trade_pct=config.risk_per_trade_pct,
+            atr_multiplier=config.atr_multiplier,
+            atr_period=config.atr_period,
+        )
+    executor = Executor(router, safety, position_sizer=sizer)
+
+    # Open broker context
+    if broker_client is not None:
+        try:
+            await broker_client.__aenter__()
+            market_data.set_broker_client(broker_client)
+        except Exception:
+            logger.info("Broker client open failed — using yfinance fallback")
+            broker_client = None
+
+    # ── 3. Discover symbols (scan if needed) ─────────────────────────
+    try:
+        if symbols:
+            trade_symbols = symbols
+            logger.info("Explicit symbols: %s", trade_symbols)
+        else:
+            logger.info("Running scanner to find top %d candidate(s)...", max_candidates)
+            try:
+                candidates = await _run_scan(
+                    max_candidates,
+                )
+                report.candidates_scanned = len(candidates)
+                trade_symbols = [c.symbol for c in candidates[:max_candidates]]
+                logger.info(
+                    "Scanner found %d candidates: %s",
+                    len(trade_symbols), trade_symbols,
+                )
+                if not trade_symbols:
+                    logger.info("No candidates found — nothing to trade")
+                    return {"report": report}
+            except Exception as exc:
+                logger.error("Scanner failed: %s", exc, exc_info=True)
+                report.errors.append(f"Scanner error: {exc}")
+                return {"report": report}
+
+        # ── 4. Analyze + trade each symbol ───────────────────────────
+        upstream_config = _build_upstream_config(config)
+        memory_store = _create_memory_store(config)
+        analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
+        graph = SkopaqTradingGraph(
+            upstream_config, executor,
+            selected_analysts=analysts,
+            memory_store=memory_store,
+        )
+
+        regime_scale, calendar_scale = (
+            (1.0, 1.0) if is_crypto
+            else _compute_risk_scales(config, trade_date)
+        )
+
+        buys_placed = 0
+        for sym in trade_symbols:
+            report.candidates_analyzed += 1
+            logger.info("Analyzing %s...", sym)
+
+            # Pre-warm quote cache
+            try:
+                await market_data.get_quote(sym)
+            except Exception:
+                logger.debug("Quote pre-warm failed for %s", sym)
+
+            try:
+                result = await graph.analyze_and_execute(
+                    sym, trade_date,
+                    regime_scale=regime_scale,
+                    calendar_scale=calendar_scale,
+                )
+            except Exception as exc:
+                logger.error("Analysis failed for %s: %s", sym, exc, exc_info=True)
+                report.errors.append(f"{sym}: {exc}")
+                continue
+
+            if result.error:
+                report.errors.append(f"{sym}: {result.error}")
+                continue
+
+            if result.signal is None or result.signal.action == "HOLD":
+                report.holds += 1
+                logger.info("[%s] Decision: HOLD", sym)
+                continue
+
+            if result.signal.action == "BUY":
+                if result.execution and result.execution.success:
+                    buys_placed += 1
+                    report.trades_opened += 1
+                    logger.info(
+                        "[%s] BUY EXECUTED — fill=%.2f qty=%s",
+                        sym,
+                        result.execution.fill_price or 0,
+                        result.signal.quantity,
+                    )
+
+                    # Reflection
+                    if config.reflection_enabled and memory_store:
+                        try:
+                            await _run_lifecycle(config, graph, memory_store, result)
+                        except Exception:
+                            logger.debug("Lifecycle failed for %s", sym, exc_info=True)
+                else:
+                    report.trades_rejected += 1
+                    reason = (
+                        result.execution.rejection_reason
+                        if result.execution else "no execution result"
+                    )
+                    logger.warning("[%s] BUY REJECTED: %s", sym, reason)
+
+            # For single-symbol non-monitored mode, return the raw result
+            if len(trade_symbols) == 1 and not monitor:
+                return result
+
+        # ── 5. Monitor positions ─────────────────────────────────────
+        if monitor and buys_placed > 0:
+            from skopaq.execution.position_monitor import PositionMonitor
+
+            logger.info(
+                "Starting position monitor (%d position(s))...",
+                buys_placed,
+            )
+
+            stop_event = asyncio.Event()
+
+            def _handle_sigint(*_):
+                logger.info("Ctrl+C — shutting down monitor...")
+                stop_event.set()
+
+            loop = asyncio.get_running_loop()
+            try:
+                loop.add_signal_handler(sig.SIGINT, _handle_sigint)
+            except NotImplementedError:
+                pass  # Windows
+
+            # Build LLM for sell analyst
+            llm = None
+            try:
+                from skopaq.llm import bridge_env_vars, build_llm_map
+                bridge_env_vars(config)
+                llm_map = build_llm_map()
+                llm = llm_map.get("sell_analyst", llm_map.get("_default"))
+            except Exception:
+                logger.debug("No LLM for sell analyst — rule-based only")
+
+            mon = PositionMonitor(
+                executor=executor,
+                market_data=market_data,
+                router=router,
+                config=config,
+                llm=llm,
+                stop_event=stop_event,
+                ai_enabled=llm is not None,
+            )
+            monitor_result = await mon.run()
+            report.monitor_result = monitor_result
+            report.sells_executed = monitor_result.sells_executed
+            report.sells_failed = monitor_result.sells_failed
+            report.gross_pnl = monitor_result.total_pnl
+        elif buys_placed == 0:
+            logger.info("No positions opened — skipping monitor")
+
+        # ── 6. Close remaining positions ─────────────────────────────
+        if buys_placed > 0:
+            try:
+                positions = await router.get_positions()
+                open_pos = [p for p in positions if p.quantity > 0]
+                if open_pos:
+                    from decimal import Decimal
+                    from skopaq.broker.models import TradingSignal
+
+                    logger.info("Closing %d remaining position(s)...", len(open_pos))
+                    for pos in open_pos:
+                        try:
+                            signal = TradingSignal(
+                                symbol=pos.symbol, action="SELL",
+                                confidence=100,
+                                entry_price=pos.average_price,
+                                quantity=Decimal(int(pos.quantity)),
+                                reasoning="Session close: auto-sell remaining positions",
+                            )
+                            sell_result = await executor.execute_signal(signal)
+                            if sell_result.success:
+                                logger.info("Closed %s", pos.symbol)
+                            else:
+                                logger.warning(
+                                    "Close rejected for %s: %s",
+                                    pos.symbol, sell_result.rejection_reason,
+                                )
+                        except Exception:
+                            logger.error("Close failed for %s", pos.symbol, exc_info=True)
+            except Exception:
+                logger.debug("Position check failed during close", exc_info=True)
+
+    finally:
+        # Clean up broker session
+        if broker_client is not None:
+            try:
+                await broker_client.__aexit__(None, None, None)
+            except Exception:
+                pass
+
+    return {"report": report}
 
 
 def _create_live_client(config):

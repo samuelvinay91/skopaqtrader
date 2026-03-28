@@ -136,13 +136,18 @@ Paper trading works **with or without a Kite token**. When a token is available,
 # Analyze a stock (no execution)
 skopaq analyze RELIANCE
 
-# Paper trade (simulated execution with real market data)
+# Paper trade a specific symbol (full lifecycle: trade → monitor → close)
 skopaq trade RELIANCE
 
-# Run the scanner in paper mode
+# Auto-discover and paper trade (scan → trade → monitor → close)
+skopaq trade                           # Best single pick from NIFTY 50
+skopaq trade --top 3                   # Trade top 3 scanner picks
+skopaq trade --watchlist "RELIANCE,TCS,INFY"  # Scan specific symbols
+
+# Run the scanner in paper mode (no execution)
 skopaq scan
 
-# Full autonomous paper session
+# Full autonomous paper session (daemon lifecycle)
 skopaq daemon --once --paper
 ```
 

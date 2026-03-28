@@ -44,8 +44,11 @@ python3 -m pytest tests/integration/ -v -m integration
 # CLI commands
 skopaq status              # Health check
 skopaq analyze RELIANCE    # Analysis only
-skopaq trade RELIANCE      # Analysis + execution (paper default)
-skopaq scan                # Scanner cycle
+skopaq trade RELIANCE      # Trade specific symbol (full lifecycle)
+skopaq trade               # Auto-scan → trade best pick → monitor → close
+skopaq trade --top 3       # Auto-scan → trade top 3 → monitor → close
+skopaq trade --no-monitor  # Trade without position monitoring
+skopaq scan                # Scanner cycle (no execution)
 skopaq daemon --once --paper  # Full autonomous session
 skopaq monitor             # Monitor existing positions
 skopaq serve               # FastAPI server
