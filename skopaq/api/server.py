@@ -146,10 +146,15 @@ async def scanner_candidates() -> dict:
 @app.get("/api/portfolio")
 async def portfolio() -> dict:
     """Current portfolio snapshot (paper mode)."""
+    from skopaq.broker.market_data import MarketDataProvider
     from skopaq.broker.paper_engine import PaperEngine
 
     config = SkopaqConfig()
-    paper = PaperEngine(initial_capital=config.initial_paper_capital)
+    market_data = MarketDataProvider(config)
+    paper = PaperEngine(
+        initial_capital=config.initial_paper_capital,
+        market_data=market_data,
+    )
     snapshot = paper.get_snapshot()
 
     return {

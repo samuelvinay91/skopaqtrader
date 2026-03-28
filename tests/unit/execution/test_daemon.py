@@ -35,6 +35,7 @@ def config():
     """Minimal config mock for daemon tests."""
     cfg = MagicMock()
     cfg.trading_mode = "paper"
+    cfg.broker = "indstocks"
     cfg.daemon_max_trades_per_session = 3
     cfg.daemon_max_candidates_to_analyze = 5
     cfg.daemon_pre_open_minutes = 5
@@ -243,11 +244,13 @@ async def test_analyze_respects_max_trades(daemon):
     mock_result.execution = MagicMock(success=True, fill_price=100.0)
     daemon._graph.analyze_and_execute = AsyncMock(return_value=mock_result)
 
+    daemon._market_data = AsyncMock()
+    daemon._market_data.get_quote = AsyncMock()
+
     report = DaemonSessionReport()
 
     with patch("skopaq.cli.main._compute_risk_scales", return_value=(1.0, 1.0)):
-        with patch("skopaq.cli.main._inject_paper_quote", new_callable=AsyncMock):
-            buys = await daemon._phase_analyze_and_trade(candidates, report)
+        buys = await daemon._phase_analyze_and_trade(candidates, report)
 
     assert report.trades_opened == 1  # Only 1 trade, despite 2 candidates
     assert len(buys) == 1
@@ -287,12 +290,14 @@ async def test_analyze_skips_hold_signals(daemon):
     mock_result.execution = None
     daemon._graph.analyze_and_execute = AsyncMock(return_value=mock_result)
 
+    daemon._market_data = AsyncMock()
+    daemon._market_data.get_quote = AsyncMock()
+
     candidates = [MagicMock(symbol="AAA", urgency="high")]
     report = DaemonSessionReport()
 
     with patch("skopaq.cli.main._compute_risk_scales", return_value=(1.0, 1.0)):
-        with patch("skopaq.cli.main._inject_paper_quote", new_callable=AsyncMock):
-            buys = await daemon._phase_analyze_and_trade(candidates, report)
+        buys = await daemon._phase_analyze_and_trade(candidates, report)
 
     assert report.holds == 1
     assert report.trades_opened == 0
@@ -322,11 +327,13 @@ async def test_analyze_handles_errors_gracefully(daemon):
         MagicMock(symbol="FAIL", urgency="high"),
         MagicMock(symbol="OK", urgency="normal"),
     ]
+    daemon._market_data = AsyncMock()
+    daemon._market_data.get_quote = AsyncMock()
+
     report = DaemonSessionReport()
 
     with patch("skopaq.cli.main._compute_risk_scales", return_value=(1.0, 1.0)):
-        with patch("skopaq.cli.main._inject_paper_quote", new_callable=AsyncMock):
-            buys = await daemon._phase_analyze_and_trade(candidates, report)
+        buys = await daemon._phase_analyze_and_trade(candidates, report)
 
     assert report.candidates_analyzed == 2
     assert report.trades_opened == 1  # Second candidate succeeded
@@ -341,6 +348,7 @@ async def test_monitor_receives_positions(daemon):
     """Monitor phase creates a PositionMonitor and runs it."""
     daemon._executor = MagicMock()
     daemon._client = MagicMock()
+    daemon._market_data = MagicMock()
     daemon._router = MagicMock()
     daemon._llm_map = {"sell_analyst": MagicMock()}
 

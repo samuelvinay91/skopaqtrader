@@ -38,6 +38,7 @@ class BrokerClient(Protocol):
     async def get_positions(self) -> list[Position]: ...
     async def get_holdings(self) -> list[Holding]: ...
     async def get_funds(self) -> Funds: ...
+    async def get_orders(self) -> list[OrderResponse]: ...
 
 
 class OrderRouter:
@@ -167,24 +168,5 @@ class OrderRouter:
     async def get_orders(self) -> list[OrderResponse]:
         """Get today's orders from the active backend."""
         if self._mode == "live" and self._live:
-            # Both brokers expose get_order_book() returning list[dict]
-            # but we need OrderResponse. Kite client has get_orders().
-            from skopaq.broker.kite_client import KiteConnectClient
-
-            if isinstance(self._live, KiteConnectClient):
-                return await self._live.get_orders()
-
-            # INDstocksClient — get_order_book returns raw dicts
-            from skopaq.broker.client import INDstocksClient
-
-            if isinstance(self._live, INDstocksClient):
-                raw = await self._live.get_order_book()
-                return [
-                    OrderResponse(
-                        order_id=str(o.get("order_id", "")),
-                        status=str(o.get("status", "")),
-                        message=str(o.get("message", "")),
-                    )
-                    for o in raw
-                ]
+            return await self._live.get_orders()
         return self._paper.get_orders()

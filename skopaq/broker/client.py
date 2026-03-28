@@ -481,6 +481,23 @@ class INDstocksClient:
             return data
         return []
 
+    async def get_orders(self) -> list[OrderResponse]:
+        """Fetch today's orders as OrderResponse models.
+
+        Wraps ``get_order_book()`` to provide the same interface as
+        ``KiteConnectClient.get_orders()`` for broker-agnostic usage.
+        """
+        raw = await self.get_order_book()
+        return [
+            OrderResponse(
+                order_id=str(o.get("order_id", "")),
+                status=str(o.get("status", "")),
+                message=str(o.get("message", "")),
+                exchange_order_id=o.get("exchange_order_id"),
+            )
+            for o in raw
+        ]
+
     async def get_order(self, order_id: str, segment: str = "EQUITY") -> dict[str, Any]:
         """Fetch a single order by ID.
 
