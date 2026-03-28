@@ -21,6 +21,7 @@ from skopaq.execution.order_router import OrderRouter
 def _make_config(mode: str = "paper") -> MagicMock:
     cfg = MagicMock()
     cfg.trading_mode = mode
+    cfg.broker = "indstocks"
     cfg.initial_paper_capital = 1_000_000.0
     return cfg
 
@@ -96,7 +97,7 @@ class TestLiveRouting:
         order = _buy_order(security_id="")  # Empty — needs resolution
 
         with patch(
-            "skopaq.execution.order_router.resolve_security_id",
+            "skopaq.broker.scrip_resolver.resolve_security_id",
             new_callable=AsyncMock,
             return_value="10604",
         ) as mock_resolve:
@@ -122,7 +123,7 @@ class TestLiveRouting:
         order = _buy_order(security_id="10604")
 
         with patch(
-            "skopaq.execution.order_router.resolve_security_id",
+            "skopaq.broker.scrip_resolver.resolve_security_id",
             new_callable=AsyncMock,
         ) as mock_resolve:
             result = await router.execute(order, _signal())

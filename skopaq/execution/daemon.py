@@ -108,6 +108,7 @@ class TradingDaemon:
 
         # Built during PRE_OPEN
         self._client = None       # INDstocksClient or KiteConnectClient
+        self._market_data = None  # MarketDataProvider
         self._router = None       # OrderRouter
         self._executor = None     # Executor
         self._graph = None        # SkopaqTradingGraph
@@ -302,9 +303,17 @@ class TradingDaemon:
         self._llm_map = build_llm_map()
         logger.info("LLM map built: %d roles", len(self._llm_map))
 
-        # 4. Build executor stack
+        # 4. Build executor stack with MarketDataProvider
+        from skopaq.broker.market_data import MarketDataProvider
+
         is_paper = config.trading_mode == "paper"
-        paper = PaperEngine(initial_capital=config.initial_paper_capital)
+        self._market_data = MarketDataProvider(config)
+        self._market_data.set_broker_client(self._client)
+
+        paper = PaperEngine(
+            initial_capital=config.initial_paper_capital,
+            market_data=self._market_data,
+        )
 
         live_client = None if is_paper else self._client
         self._router = OrderRouter(config, paper, live_client=live_client)
@@ -419,16 +428,14 @@ class TradingDaemon:
                 candidate.urgency,
             )
 
-            # For paper mode, inject a real-time quote
+            # Pre-warm the quote cache so analysis and fills have fresh data.
+            # MarketDataProvider handles this automatically on execute_order_async(),
+            # but pre-warming improves the entry_price resolution in the executor.
             if config.trading_mode == "paper":
                 try:
-                    from skopaq.cli.main import _inject_paper_quote
-                    paper_engine = self._router._paper  # noqa: SLF001
-                    await _inject_paper_quote(config, paper_engine, symbol)
+                    await self._market_data.get_quote(symbol)
                 except Exception:
-                    logger.warning(
-                        "Quote injection failed for %s", symbol, exc_info=True,
-                    )
+                    logger.debug("Quote pre-warm failed for %s", symbol)
 
             try:
                 result = await self._graph.analyze_and_execute(
@@ -513,7 +520,7 @@ class TradingDaemon:
 
         monitor = PositionMonitor(
             executor=self._executor,
-            client=self._client,
+            market_data=self._market_data,
             router=self._router,
             config=self._config,
             llm=llm,

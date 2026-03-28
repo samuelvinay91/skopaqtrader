@@ -3,9 +3,12 @@
 Safety tier (every poll):  hard stop-loss, trailing stop, EOD exit.
 AI tier (every N polls):   Gemini 3 Flash sell analyst for intelligent exits.
 
+Uses ``MarketDataProvider`` for LTP polling — works with any broker
+(INDstocks, Kite Connect) or falls back to yfinance in paper mode.
+
 Usage::
 
-    monitor = PositionMonitor(executor, client, router, config, llm, stop_event)
+    monitor = PositionMonitor(executor, market_data, router, config, llm, stop_event)
     result = await monitor.run()
 """
 
@@ -22,7 +25,7 @@ from skopaq.agents.sell_analyst import SellDecision, analyze_exit
 from skopaq.broker.models import TradingSignal
 
 if TYPE_CHECKING:
-    from skopaq.broker.client import INDstocksClient
+    from skopaq.broker.market_data import MarketDataProvider
     from skopaq.config import SkopaqConfig
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
@@ -39,7 +42,6 @@ class MonitoredPosition:
     """Per-position tracking state."""
 
     symbol: str
-    scrip_code: str
     entry_price: float
     quantity: int
     high_water_mark: float = 0.0  # For trailing stop
@@ -80,15 +82,17 @@ class PositionMonitor:
     def __init__(
         self,
         executor: Executor,
-        client: INDstocksClient,
+        market_data: MarketDataProvider,
         router: OrderRouter,
         config: SkopaqConfig,
         llm=None,
         stop_event: Optional[asyncio.Event] = None,
         ai_enabled: bool = True,
+        # Backward compat: accept `client` kwarg and ignore it
+        client=None,
     ):
         self._executor = executor
-        self._client = client
+        self._market_data = market_data
         self._router = router
         self._config = config
         self._llm = llm
@@ -106,7 +110,8 @@ class PositionMonitor:
         # Minimum profit gate — prevents selling for tiny gains eaten by brokerage
         self._min_profit_pct = config.daemon_min_profit_threshold_pct
         self._min_profit_inr = config.daemon_min_profit_threshold_inr
-        self._est_brokerage = 120.0  # ~₹60 per side for INDstocks (brokerage + GST)
+        # Estimate round-trip brokerage (varies by broker, conservative default)
+        self._est_brokerage = 120.0  # ~₹60 per side (brokerage + GST)
 
     async def run(self) -> MonitorResult:
         """Main monitoring loop.  Returns when all positions are closed,
@@ -131,9 +136,9 @@ class PositionMonitor:
             result.cycles = cycle
 
             for pos in list(positions):  # copy — may mutate
-                # Fetch current price
+                # Fetch current price via MarketDataProvider
                 try:
-                    ltp = await self._client.get_ltp(pos.scrip_code)
+                    ltp = await self._market_data.get_ltp(pos.symbol)
                 except Exception:
                     logger.warning(
                         "LTP fetch failed for %s — skipping cycle",
@@ -205,7 +210,7 @@ class PositionMonitor:
         if positions and self._should_eod_exit():
             for pos in list(positions):
                 try:
-                    ltp = await self._client.get_ltp(pos.scrip_code)
+                    ltp = await self._market_data.get_ltp(pos.symbol)
                 except Exception:
                     ltp = 0
                 if ltp > 0:
@@ -216,27 +221,19 @@ class PositionMonitor:
     # ── Discovery ────────────────────────────────────────────────────────
 
     async def _discover_positions(self) -> list[MonitoredPosition]:
-        """Fetch open positions and resolve scrip codes."""
-        from skopaq.broker.scrip_resolver import resolve_scrip_code
+        """Fetch open positions from the router.
 
+        No scrip code resolution needed — the MarketDataProvider handles
+        symbol-to-instrument mapping internally for each broker.
+        """
         raw_positions = await self._router.get_positions()
         monitored = []
 
         for pos in raw_positions:
             if pos.quantity <= 0:
                 continue
-            try:
-                scrip_code = await resolve_scrip_code(self._client, pos.symbol)
-            except Exception:
-                logger.warning(
-                    "Could not resolve scrip for %s — skipping",
-                    pos.symbol, exc_info=True,
-                )
-                continue
-
             monitored.append(MonitoredPosition(
                 symbol=pos.symbol,
-                scrip_code=scrip_code,
                 entry_price=pos.average_price,
                 quantity=int(pos.quantity),
             ))
@@ -338,16 +335,13 @@ class PositionMonitor:
         )
 
         try:
-            # Inject quote for paper mode
+            # Inject fresh quote for paper mode so the fill simulation
+            # uses the latest LTP with realistic bid/ask from provider
             if self._config.trading_mode == "paper":
-                from skopaq.broker.models import Quote
-                paper_engine = self._router._paper  # noqa: SLF001
-                paper_engine.update_quote(Quote(
-                    symbol=pos.symbol,
-                    ltp=ltp,
-                    bid=ltp * 0.999,
-                    ask=ltp * 1.001,
-                ))
+                quote = await self._market_data.get_quote(pos.symbol)
+                if quote.ltp > 0:
+                    paper_engine = self._router._paper  # noqa: SLF001
+                    paper_engine.update_quote(quote)
 
             exec_result = await self._executor.execute_signal(signal)
 

@@ -332,6 +332,7 @@ async def _run_trade(symbol: str, trade_date: str):
            paper engine so ``execute_order()`` can simulate a fill.
         3. Wires the trade lifecycle manager for auto-reflection on SELL.
     """
+    from skopaq.broker.market_data import MarketDataProvider
     from skopaq.broker.paper_engine import PaperEngine
     from skopaq.config import SkopaqConfig
     from skopaq.constants import (
@@ -348,15 +349,22 @@ async def _run_trade(symbol: str, trade_date: str):
     config = SkopaqConfig()
     is_crypto = config.asset_class == "crypto"
 
+    # MarketDataProvider — auto-fallback: broker API → yfinance → cache
+    market_data = MarketDataProvider(config)
+
     # Paper engine — crypto uses % brokerage + USDT capital
     if is_crypto:
         paper = PaperEngine(
             initial_capital=config.initial_paper_capital,
             brokerage_pct=0.001,         # 0.1% Binance spot fee
             currency_label="USDT",
+            market_data=market_data,
         )
     else:
-        paper = PaperEngine(initial_capital=config.initial_paper_capital)
+        paper = PaperEngine(
+            initial_capital=config.initial_paper_capital,
+            market_data=market_data,
+        )
 
     # Choose safety rules based on trading mode + asset class
     if is_crypto:
@@ -364,10 +372,20 @@ async def _run_trade(symbol: str, trade_date: str):
     else:
         rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
 
-    # Wire live broker client when in live mode
+    # Wire live broker client when in live mode; also attach to market data
     live_client = None
     if config.trading_mode == "live":
         live_client = _create_live_client(config)
+    else:
+        # In paper mode, try to attach a broker client for best-quality data.
+        # If no token is available, MarketDataProvider falls back to yfinance.
+        try:
+            broker_client = _create_live_client(config)
+            await broker_client.__aenter__()
+            market_data.set_broker_client(broker_client)
+            logger.info("Paper mode: attached %s broker for live market data", config.broker)
+        except Exception:
+            logger.info("Paper mode: no broker token — using yfinance for market data")
 
     router = OrderRouter(config, paper, live_client=live_client)
     safety = SafetyChecker(
@@ -385,13 +403,6 @@ async def _run_trade(symbol: str, trade_date: str):
         )
 
     executor = Executor(router, safety, position_sizer=sizer)
-
-    # For paper mode, inject a real-time quote so the fill simulation has a price.
-    if config.trading_mode == "paper":
-        if is_crypto:
-            await _inject_crypto_quote(config, paper, symbol)
-        else:
-            await _inject_paper_quote(config, paper, symbol)
 
     # Compute regime and calendar scales for position sizing
     # (India VIX + NSE calendar are irrelevant for crypto — skip)
@@ -748,22 +759,35 @@ async def _run_monitor(config, ai_enabled: bool):
     """Async helper to run the position monitor."""
     import signal as sig
 
+    from skopaq.broker.market_data import MarketDataProvider
     from skopaq.constants import PAPER_SAFETY_RULES, SAFETY_RULES
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.position_monitor import PositionMonitor
     from skopaq.execution.safety_checker import SafetyChecker
 
-    # Create broker client for LTP polling (INDstocks or Kite)
-    client = _create_live_client(config)
+    # MarketDataProvider — handles all LTP/quote fetching for any broker
+    market_data = MarketDataProvider(config)
 
     # Wire live or paper backend
     from skopaq.broker.paper_engine import PaperEngine
 
-    paper = PaperEngine(initial_capital=config.initial_paper_capital)
+    paper = PaperEngine(
+        initial_capital=config.initial_paper_capital,
+        market_data=market_data,
+    )
     live_client = None
+    broker_client = None
+
     if config.trading_mode == "live":
-        live_client = client  # reuse same client
+        live_client = _create_live_client(config)
+        broker_client = live_client
+    else:
+        # Paper mode — try to attach broker for real market data
+        try:
+            broker_client = _create_live_client(config)
+        except Exception:
+            logger.info("No broker token — using yfinance for market data")
 
     router = OrderRouter(config, paper, live_client=live_client)
     rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
@@ -801,11 +825,15 @@ async def _run_monitor(config, ai_enabled: bool):
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(sig.SIGINT, _handle_sigint)
 
-    # Run monitor within client context
-    async with client:
+    # Open broker client context and wire into market data provider
+    if broker_client is not None:
+        await broker_client.__aenter__()
+        market_data.set_broker_client(broker_client)
+
+    try:
         monitor_instance = PositionMonitor(
             executor=executor,
-            client=client,
+            market_data=market_data,
             router=router,
             config=config,
             llm=llm,
@@ -813,6 +841,9 @@ async def _run_monitor(config, ai_enabled: bool):
             ai_enabled=ai_enabled,
         )
         return await monitor_instance.run()
+    finally:
+        if broker_client is not None:
+            await broker_client.__aexit__(None, None, None)
 
 
 # ── Daemon ───────────────────────────────────────────────────────────────────

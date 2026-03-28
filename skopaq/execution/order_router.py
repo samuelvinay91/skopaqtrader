@@ -79,14 +79,20 @@ class OrderRouter:
         """Route an order to the appropriate backend."""
         if self._mode == "live":
             return await self._execute_live(order, signal)
-        return self._execute_paper(order, signal)
+        return await self._execute_paper(order, signal)
 
-    def _execute_paper(
+    async def _execute_paper(
         self,
         order: OrderRequest,
         signal: Optional[TradingSignal],
     ) -> ExecutionResult:
-        """Execute via paper engine (synchronous)."""
+        """Execute via paper engine.
+
+        Uses async execution (with auto-refresh) when a MarketDataProvider
+        is attached, otherwise falls back to synchronous execution.
+        """
+        if self._paper._market_data is not None:
+            return await self._paper.execute_order_async(order, signal)
         return self._paper.execute_order(order, signal)
 
     async def _execute_live(
@@ -101,22 +107,20 @@ class OrderRouter:
         """
         if self._live is None:
             logger.error("Live client not configured — falling back to paper")
-            return self._execute_paper(order, signal)
+            return await self._execute_paper(order, signal)
 
         try:
-            # INDstocks requires security_id resolution
+            # INDstocks requires security_id resolution before placing
             if self._broker == "indstocks" and not order.security_id:
-                from skopaq.broker.client import INDstocksClient
                 from skopaq.broker.scrip_resolver import resolve_security_id
 
-                if isinstance(self._live, INDstocksClient):
-                    order.security_id = await resolve_security_id(
-                        self._live, order.symbol, order.exchange.value,
-                    )
-                    logger.info(
-                        "Resolved %s → security_id=%s",
-                        order.symbol, order.security_id,
-                    )
+                order.security_id = await resolve_security_id(
+                    self._live, order.symbol, order.exchange.value,
+                )
+                logger.info(
+                    "Resolved %s → security_id=%s",
+                    order.symbol, order.security_id,
+                )
 
             response = await self._live.place_order(order)
 
