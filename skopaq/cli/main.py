@@ -94,18 +94,120 @@ def token_clear() -> None:
     display_success("Token cleared")
 
 
+# ── Kite Connect token management ────────────────────────────────────────────
+
+kite_app = typer.Typer(help="Kite Connect (Zerodha) token management.")
+app.add_typer(kite_app, name="kite")
+
+
+@kite_app.command("login-url")
+def kite_login_url() -> None:
+    """Print the Kite Connect login URL."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+    from skopaq.config import SkopaqConfig
+
+    config = SkopaqConfig()
+    api_key = config.kite_api_key.get_secret_value()
+    if not api_key:
+        display_error("SKOPAQ_KITE_API_KEY not set in .env")
+        raise typer.Exit(code=1)
+
+    url = KiteTokenManager.get_login_url(api_key)
+    display_success(f"Open this URL in your browser:\n{url}")
+
+
+@kite_app.command("set-token")
+def kite_set_token(
+    access_token: str = typer.Argument(..., help="Access token from Kite session."),
+) -> None:
+    """Store a Kite Connect access token."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+
+    mgr = KiteTokenManager()
+    mgr.set_token(access_token)
+    health = mgr.get_health()
+    if health.valid:
+        display_success(
+            f"Kite token stored. Expires at {health.expires_at}"
+        )
+    else:
+        display_error(health.warning)
+
+
+@kite_app.command("session")
+def kite_session(
+    request_token: str = typer.Argument(..., help="Request token from login redirect URL."),
+) -> None:
+    """Exchange request_token for access_token and store it."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+    from skopaq.config import SkopaqConfig
+
+    config = SkopaqConfig()
+    api_key = config.kite_api_key.get_secret_value()
+    api_secret = config.kite_api_secret.get_secret_value()
+
+    if not api_key or not api_secret:
+        display_error("SKOPAQ_KITE_API_KEY and SKOPAQ_KITE_API_SECRET must be set in .env")
+        raise typer.Exit(code=1)
+
+    mgr = KiteTokenManager()
+
+    async def _generate():
+        return await mgr.generate_session(api_key, api_secret, request_token)
+
+    try:
+        access_token = asyncio.run(_generate())
+        display_success(f"Kite session established. Token: {access_token[:8]}...")
+    except Exception as exc:
+        display_error(f"Kite session failed: {exc}")
+        raise typer.Exit(code=1)
+
+
+@kite_app.command("status")
+def kite_status() -> None:
+    """Check Kite Connect token health."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+
+    mgr = KiteTokenManager()
+    health = mgr.get_health()
+    if health.valid:
+        display_success(
+            f"Kite token valid. Expires in {health.remaining} (at {health.expires_at})"
+        )
+    else:
+        display_error(health.warning)
+        raise typer.Exit(code=1)
+
+
+@kite_app.command("clear")
+def kite_clear() -> None:
+    """Delete stored Kite token."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+
+    mgr = KiteTokenManager()
+    mgr.clear()
+    display_success("Kite token cleared")
+
+
 # ── Status ───────────────────────────────────────────────────────────────────
 
 
 @app.command("status")
 def status() -> None:
     """Show system health overview."""
-    from skopaq.broker.token_manager import TokenManager
     from skopaq.config import SkopaqConfig
 
     config = SkopaqConfig()
-    mgr = TokenManager()
-    health = mgr.get_health()
+
+    # Get token health for the configured broker
+    if config.broker == "kite":
+        from skopaq.broker.kite_token_manager import KiteTokenManager
+        mgr = KiteTokenManager()
+        health = mgr.get_health()
+    else:
+        from skopaq.broker.token_manager import TokenManager
+        mgr = TokenManager()
+        health = mgr.get_health()
 
     # Detect configured LLMs
     llms = []
@@ -265,11 +367,7 @@ async def _run_trade(symbol: str, trade_date: str):
     # Wire live broker client when in live mode
     live_client = None
     if config.trading_mode == "live":
-        from skopaq.broker.client import INDstocksClient
-        from skopaq.broker.token_manager import TokenManager
-
-        token_mgr = TokenManager()
-        live_client = INDstocksClient(config, token_mgr)
+        live_client = _create_live_client(config)
 
     router = OrderRouter(config, paper, live_client=live_client)
     safety = SafetyChecker(
@@ -344,13 +442,42 @@ async def _run_trade(symbol: str, trade_date: str):
     return result
 
 
+def _create_live_client(config):
+    """Create the appropriate live broker client based on config.broker.
+
+    Returns an INDstocksClient or KiteConnectClient (both are async context managers).
+    """
+    if config.broker == "kite":
+        from skopaq.broker.kite_client import KiteConnectClient
+        from skopaq.broker.kite_token_manager import KiteTokenManager
+
+        token_mgr = KiteTokenManager()
+        return KiteConnectClient(config, token_mgr)
+    else:
+        from skopaq.broker.client import INDstocksClient
+        from skopaq.broker.token_manager import TokenManager
+
+        token_mgr = TokenManager()
+        return INDstocksClient(config, token_mgr)
+
+
 async def _inject_paper_quote(config, paper, symbol: str) -> None:
-    """Fetch a real quote from INDstocks and inject it into the paper engine.
+    """Fetch a real quote from a broker and inject it into the paper engine.
 
     The paper engine requires a Quote in its ``_quotes`` cache before
     ``execute_order()`` can simulate a fill.  Without this, it returns
     "No quote available for {symbol}".
+
+    Supports both INDstocks and Kite Connect brokers.
     """
+    if config.broker == "kite":
+        await _inject_kite_quote(config, paper, symbol)
+    else:
+        await _inject_indstocks_quote(config, paper, symbol)
+
+
+async def _inject_indstocks_quote(config, paper, symbol: str) -> None:
+    """Fetch a real quote from INDstocks and inject it into the paper engine."""
     from skopaq.broker.client import INDstocksClient
     from skopaq.broker.scrip_resolver import resolve_scrip_code
     from skopaq.broker.token_manager import TokenManager
@@ -372,6 +499,29 @@ async def _inject_paper_quote(config, paper, symbol: str) -> None:
     except Exception as exc:
         logger.warning(
             "Could not fetch quote for %s — paper fill may fail: %s",
+            symbol, exc,
+        )
+
+
+async def _inject_kite_quote(config, paper, symbol: str) -> None:
+    """Fetch a real quote from Kite Connect and inject it into the paper engine."""
+    from skopaq.broker.kite_client import KiteConnectClient
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+
+    token_mgr = KiteTokenManager()
+    client = KiteConnectClient(config, token_mgr)
+
+    try:
+        async with client:
+            quote = await client.get_quote(f"NSE:{symbol}", symbol=symbol)
+            paper.update_quote(quote)
+            logger.info(
+                "Injected Kite quote: %s LTP=%.2f bid=%.2f ask=%.2f",
+                symbol, quote.ltp, quote.bid, quote.ask,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Could not fetch Kite quote for %s — paper fill may fail: %s",
             symbol, exc,
         )
 
@@ -461,41 +611,65 @@ async def _run_scan(max_candidates: int):
     else:
         watchlist = Watchlist()
 
-        async def quote_fetcher(symbols: list[str]) -> list[dict]:
-            """Batch-fetch INDstocks quotes for equity symbols."""
-            from skopaq.broker.client import INDstocksClient
-            from skopaq.broker.scrip_resolver import resolve_scrip_code
-            from skopaq.broker.token_manager import TokenManager
+        if config.broker == "kite":
+            async def quote_fetcher(symbols: list[str]) -> list[dict]:
+                """Batch-fetch Kite Connect quotes for equity symbols."""
+                from skopaq.broker.kite_client import KiteConnectClient
+                from skopaq.broker.kite_token_manager import KiteTokenManager
 
-            token_mgr = TokenManager()
-            async with INDstocksClient(config, token_mgr) as client:
-                # Resolve all symbols → scrip codes (instruments CSV cached 1h)
-                resolved: list[tuple[str, str]] = []
-                for sym in symbols:
-                    try:
-                        code = await resolve_scrip_code(client, sym)
-                        resolved.append((sym, code))
-                    except ValueError:
-                        logger.debug("Scrip resolve failed: %s", sym)
+                token_mgr = KiteTokenManager()
+                async with KiteConnectClient(config, token_mgr) as client:
+                    kite_keys = [f"NSE:{sym}" for sym in symbols]
+                    raw_quotes = await client.get_quotes(kite_keys, symbols=symbols)
 
-                if not resolved:
-                    return []
+                    return [
+                        {
+                            "symbol": q.symbol,
+                            "ltp": q.ltp,
+                            "open": q.open,
+                            "high": q.high,
+                            "low": q.low,
+                            "close": q.close,
+                            "volume": q.volume,
+                        }
+                        for q in raw_quotes
+                    ]
+        else:
+            async def quote_fetcher(symbols: list[str]) -> list[dict]:
+                """Batch-fetch INDstocks quotes for equity symbols."""
+                from skopaq.broker.client import INDstocksClient
+                from skopaq.broker.scrip_resolver import resolve_scrip_code
+                from skopaq.broker.token_manager import TokenManager
 
-                syms, codes = zip(*resolved)
-                raw_quotes = await client.get_quotes(list(codes), symbols=list(syms))
+                token_mgr = TokenManager()
+                async with INDstocksClient(config, token_mgr) as client:
+                    # Resolve all symbols → scrip codes (instruments CSV cached 1h)
+                    resolved: list[tuple[str, str]] = []
+                    for sym in symbols:
+                        try:
+                            code = await resolve_scrip_code(client, sym)
+                            resolved.append((sym, code))
+                        except ValueError:
+                            logger.debug("Scrip resolve failed: %s", sym)
 
-                return [
-                    {
-                        "symbol": q.symbol,
-                        "ltp": q.ltp,
-                        "open": q.open,
-                        "high": q.high,
-                        "low": q.low,
-                        "close": q.close,
-                        "volume": q.volume,
-                    }
-                    for q in raw_quotes
-                ]
+                    if not resolved:
+                        return []
+
+                    syms, codes = zip(*resolved)
+                    raw_quotes = await client.get_quotes(list(codes), symbols=list(syms))
+
+                    return [
+                        {
+                            "symbol": q.symbol,
+                            "ltp": q.ltp,
+                            "open": q.open,
+                            "high": q.high,
+                            "low": q.low,
+                            "close": q.close,
+                            "volume": q.volume,
+                        }
+                        for q in raw_quotes
+                    ]
 
     # ── LLM screener factories ───────────────────────────────────────
 
@@ -574,17 +748,14 @@ async def _run_monitor(config, ai_enabled: bool):
     """Async helper to run the position monitor."""
     import signal as sig
 
-    from skopaq.broker.client import INDstocksClient
-    from skopaq.broker.token_manager import TokenManager
     from skopaq.constants import PAPER_SAFETY_RULES, SAFETY_RULES
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.position_monitor import PositionMonitor
     from skopaq.execution.safety_checker import SafetyChecker
 
-    # Always need an INDstocksClient for LTP polling
-    token_mgr = TokenManager()
-    client = INDstocksClient(config, token_mgr)
+    # Create broker client for LTP polling (INDstocks or Kite)
+    client = _create_live_client(config)
 
     # Wire live or paper backend
     from skopaq.broker.paper_engine import PaperEngine

@@ -107,7 +107,7 @@ class TradingDaemon:
         self._scan_delay = config.daemon_scan_delay_after_open_seconds
 
         # Built during PRE_OPEN
-        self._client = None       # INDstocksClient
+        self._client = None       # INDstocksClient or KiteConnectClient
         self._router = None       # OrderRouter
         self._executor = None     # Executor
         self._graph = None        # SkopaqTradingGraph
@@ -249,11 +249,10 @@ class TradingDaemon:
 
     async def _phase_pre_open(self) -> None:
         """Validate token, build LLM map, create executor stack."""
-        from skopaq.broker.client import INDstocksClient
         from skopaq.broker.paper_engine import PaperEngine
-        from skopaq.broker.token_manager import TokenManager
         from skopaq.cli.main import (
             _build_upstream_config,
+            _create_live_client,
             _create_memory_store,
         )
         from skopaq.execution.executor import Executor
@@ -265,24 +264,36 @@ class TradingDaemon:
 
         config = self._config
 
-        # 1. Validate INDstocks token
-        token_mgr = TokenManager()
-        health = token_mgr.get_health()
-        if not health.valid:
-            raise RuntimeError(
-                f"INDstocks token invalid: {health.warning}. "
-                "Run `skopaq token set <token>` first."
-            )
+        # 1. Validate broker token (INDstocks or Kite)
+        if config.broker == "kite":
+            from skopaq.broker.kite_token_manager import KiteTokenManager
+            token_mgr = KiteTokenManager()
+            health = token_mgr.get_health()
+            if not health.valid:
+                raise RuntimeError(
+                    f"Kite token invalid: {health.warning}. "
+                    "Run `skopaq kite session <request_token>` first."
+                )
+        else:
+            from skopaq.broker.token_manager import TokenManager
+            token_mgr = TokenManager()
+            health = token_mgr.get_health()
+            if not health.valid:
+                raise RuntimeError(
+                    f"INDstocks token invalid: {health.warning}. "
+                    "Run `skopaq token set <token>` first."
+                )
         logger.info("Token valid — expires in %s", health.remaining)
 
         # 2. Open broker client session
-        self._client = INDstocksClient(config, token_mgr)
+        self._client = _create_live_client(config)
         await self._client.__aenter__()
 
         # Validate token against API
         profile = await self._client.get_profile()
         logger.info(
-            "Broker session open — user=%s",
+            "Broker session open — broker=%s user=%s",
+            config.broker,
             profile.name or profile.email or "unknown",
         )
 

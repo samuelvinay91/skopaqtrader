@@ -1,1 +1,1 @@
-"""INDstocks broker integration — REST client, WebSocket, token management, paper trading."""
+"""INDstocks & Kite Connect broker integration — REST clients, WebSocket, token management, paper trading."""
