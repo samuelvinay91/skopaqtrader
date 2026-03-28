@@ -45,6 +45,17 @@ class SkopaqConfig(BaseSettings):
     kite_api_secret: SecretStr = SecretStr("")
     kite_access_token: SecretStr = SecretStr("")  # Set directly or via login flow
 
+    # ── Angel One SmartAPI (free market data) ────────────────────────────
+    angelone_api_key: SecretStr = SecretStr("")
+    angelone_client_id: str = ""
+    angelone_password: SecretStr = SecretStr("")
+    angelone_totp_secret: SecretStr = SecretStr("")
+
+    # ── Upstox API (free market data) ──────────────────────────────────
+    upstox_api_key: SecretStr = SecretStr("")
+    upstox_api_secret: SecretStr = SecretStr("")
+    upstox_access_token: SecretStr = SecretStr("")
+
     # ── Trading Mode ────────────────────────────────────────────────────
     trading_mode: Literal["paper", "live"] = "paper"
     initial_paper_capital: float = 1_000_000.0  # INR

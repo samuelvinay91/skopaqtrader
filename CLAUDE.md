@@ -113,9 +113,13 @@ Set `SKOPAQ_BROKER=indstocks` (default) or `SKOPAQ_BROKER=kite` to choose the br
 `skopaq/broker/market_data.py` — unified async market data layer used by paper engine and position monitor. Tries sources in priority order:
 
 1. **Broker API** (INDstocks or Kite) — best data, real bid/ask
-2. **yfinance** (no credentials) — free fallback for any symbol
-3. **Binance public API** — for crypto (no auth needed)
-4. **Stale cache** — last resort, returns last known quote
+2. **Angel One SmartAPI** (free, real-time) — real bid/ask, 5-level depth
+3. **Upstox API** (free, real-time) — real bid/ask, backup source
+4. **yfinance** (no credentials) — free fallback, delayed, synthetic bid/ask
+5. **Binance public API** — for crypto (no auth needed)
+6. **Stale cache** — last resort, returns last known quote
+
+Angel One and Upstox auto-initialize on first use if credentials are configured. No code changes needed — just set env vars.
 
 Paper mode auto-refreshes quotes before every fill via `PaperEngine.execute_order_async()`.
 

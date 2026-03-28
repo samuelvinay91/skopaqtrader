@@ -69,6 +69,12 @@ class MarketDataProvider:
         self._broker_type: str = config.broker if config else "indstocks"
         self._asset_class: str = config.asset_class if config else "equity"
 
+        # Optional additional data providers
+        self._angelone_client: Optional[Any] = None
+        self._upstox_client: Optional[Any] = None
+        self._angelone_initialized: bool = False
+        self._upstox_initialized: bool = False
+
         # Quote cache: {symbol: (Quote, timestamp)}
         self._cache: dict[str, tuple[Quote, float]] = {}
 
@@ -76,9 +82,17 @@ class MarketDataProvider:
         """Attach a live broker client (INDstocksClient or KiteConnectClient).
 
         When set, the provider uses the broker API as the primary data source.
-        When not set, falls back to yfinance/Binance public APIs.
+        When not set, falls back to other providers.
         """
         self._broker_client = client
+
+    def set_angelone_client(self, client: Any) -> None:
+        """Attach an Angel One SmartAPI client for real-time data."""
+        self._angelone_client = client
+
+    def set_upstox_client(self, client: Any) -> None:
+        """Attach an Upstox API client for real-time data."""
+        self._upstox_client = client
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -93,19 +107,31 @@ class MarketDataProvider:
         if cached is not None:
             return cached
 
-        # Source 1: Broker API (if available)
+        # Source 1: Broker API (Kite/INDstocks — if available)
         quote = await self._fetch_broker_quote(symbol)
         if quote is not None and quote.ltp > 0:
             self._put_cache(symbol, quote)
             return quote
 
-        # Source 2: yfinance (free, no credentials)
+        # Source 2: Angel One SmartAPI (free, real-time, real bid/ask)
+        quote = await self._fetch_angelone_quote(symbol)
+        if quote is not None and quote.ltp > 0:
+            self._put_cache(symbol, quote)
+            return quote
+
+        # Source 3: Upstox API (free, real-time, real bid/ask)
+        quote = await self._fetch_upstox_quote(symbol)
+        if quote is not None and quote.ltp > 0:
+            self._put_cache(symbol, quote)
+            return quote
+
+        # Source 4: yfinance (free, no credentials — delayed, synthetic bid/ask)
         quote = await self._fetch_yfinance_quote(symbol)
         if quote is not None and quote.ltp > 0:
             self._put_cache(symbol, quote)
             return quote
 
-        # Source 3: Binance public API (for crypto)
+        # Source 5: Binance public API (for crypto)
         if self._asset_class == "crypto":
             quote = await self._fetch_binance_quote(symbol)
             if quote is not None and quote.ltp > 0:
@@ -188,6 +214,92 @@ class MarketDataProvider:
                 "Broker LTP fetch failed for %s", symbol, exc_info=True,
             )
             return 0.0
+
+    # ── Angel One source ──────────────────────────────────────────────────
+
+    async def _fetch_angelone_quote(self, symbol: str) -> Optional[Quote]:
+        """Fetch quote from Angel One SmartAPI (free, real-time, real bid/ask).
+
+        Auto-initializes on first call if credentials are configured.
+        """
+        if self._angelone_client is None and not self._angelone_initialized:
+            self._angelone_initialized = True
+            self._angelone_client = await self._try_init_angelone()
+
+        if self._angelone_client is None:
+            return None
+
+        try:
+            return await self._angelone_client.get_quote(symbol)
+        except Exception:
+            logger.debug(
+                "Angel One quote failed for %s", symbol, exc_info=True,
+            )
+            return None
+
+    async def _try_init_angelone(self) -> Optional[Any]:
+        """Try to initialize Angel One client from config credentials."""
+        if self._config is None:
+            return None
+        api_key = self._config.angelone_api_key.get_secret_value()
+        client_id = self._config.angelone_client_id
+        password = self._config.angelone_password.get_secret_value()
+        if not (api_key and client_id and password):
+            return None
+        try:
+            from skopaq.broker.angelone_client import AngelOneClient
+            totp = self._config.angelone_totp_secret.get_secret_value()
+            client = AngelOneClient(
+                api_key=api_key,
+                client_id=client_id,
+                password=password,
+                totp_secret=totp,
+            )
+            await client.__aenter__()
+            logger.info("Angel One SmartAPI connected (free real-time data)")
+            return client
+        except Exception:
+            logger.debug("Angel One init failed — skipping", exc_info=True)
+            return None
+
+    # ── Upstox source ────────────────────────────────────────────────────
+
+    async def _fetch_upstox_quote(self, symbol: str) -> Optional[Quote]:
+        """Fetch quote from Upstox API (free, real-time, real bid/ask).
+
+        Auto-initializes on first call if credentials are configured.
+        """
+        if self._upstox_client is None and not self._upstox_initialized:
+            self._upstox_initialized = True
+            self._upstox_client = await self._try_init_upstox()
+
+        if self._upstox_client is None:
+            return None
+
+        try:
+            return await self._upstox_client.get_quote(symbol)
+        except Exception:
+            logger.debug(
+                "Upstox quote failed for %s", symbol, exc_info=True,
+            )
+            return None
+
+    async def _try_init_upstox(self) -> Optional[Any]:
+        """Try to initialize Upstox client from config credentials."""
+        if self._config is None:
+            return None
+        access_token = self._config.upstox_access_token.get_secret_value()
+        if not access_token:
+            return None
+        try:
+            from skopaq.broker.upstox_client import UpstoxClient
+            client = UpstoxClient(access_token=access_token)
+            await client.__aenter__()
+            logger.info("Upstox API connected (free real-time data)")
+            return client
+        except Exception:
+            logger.debug("Upstox init failed — skipping", exc_info=True)
+            return None
 
     # ── yfinance source ───────────────────────────────────────────────────
 
