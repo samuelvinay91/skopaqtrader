@@ -94,18 +94,120 @@ def token_clear() -> None:
     display_success("Token cleared")
 
 
+# ── Kite Connect token management ────────────────────────────────────────────
+
+kite_app = typer.Typer(help="Kite Connect (Zerodha) token management.")
+app.add_typer(kite_app, name="kite")
+
+
+@kite_app.command("login-url")
+def kite_login_url() -> None:
+    """Print the Kite Connect login URL."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+    from skopaq.config import SkopaqConfig
+
+    config = SkopaqConfig()
+    api_key = config.kite_api_key.get_secret_value()
+    if not api_key:
+        display_error("SKOPAQ_KITE_API_KEY not set in .env")
+        raise typer.Exit(code=1)
+
+    url = KiteTokenManager.get_login_url(api_key)
+    display_success(f"Open this URL in your browser:\n{url}")
+
+
+@kite_app.command("set-token")
+def kite_set_token(
+    access_token: str = typer.Argument(..., help="Access token from Kite session."),
+) -> None:
+    """Store a Kite Connect access token."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+
+    mgr = KiteTokenManager()
+    mgr.set_token(access_token)
+    health = mgr.get_health()
+    if health.valid:
+        display_success(
+            f"Kite token stored. Expires at {health.expires_at}"
+        )
+    else:
+        display_error(health.warning)
+
+
+@kite_app.command("session")
+def kite_session(
+    request_token: str = typer.Argument(..., help="Request token from login redirect URL."),
+) -> None:
+    """Exchange request_token for access_token and store it."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+    from skopaq.config import SkopaqConfig
+
+    config = SkopaqConfig()
+    api_key = config.kite_api_key.get_secret_value()
+    api_secret = config.kite_api_secret.get_secret_value()
+
+    if not api_key or not api_secret:
+        display_error("SKOPAQ_KITE_API_KEY and SKOPAQ_KITE_API_SECRET must be set in .env")
+        raise typer.Exit(code=1)
+
+    mgr = KiteTokenManager()
+
+    async def _generate():
+        return await mgr.generate_session(api_key, api_secret, request_token)
+
+    try:
+        access_token = asyncio.run(_generate())
+        display_success(f"Kite session established. Token: {access_token[:8]}...")
+    except Exception as exc:
+        display_error(f"Kite session failed: {exc}")
+        raise typer.Exit(code=1)
+
+
+@kite_app.command("status")
+def kite_status() -> None:
+    """Check Kite Connect token health."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+
+    mgr = KiteTokenManager()
+    health = mgr.get_health()
+    if health.valid:
+        display_success(
+            f"Kite token valid. Expires in {health.remaining} (at {health.expires_at})"
+        )
+    else:
+        display_error(health.warning)
+        raise typer.Exit(code=1)
+
+
+@kite_app.command("clear")
+def kite_clear() -> None:
+    """Delete stored Kite token."""
+    from skopaq.broker.kite_token_manager import KiteTokenManager
+
+    mgr = KiteTokenManager()
+    mgr.clear()
+    display_success("Kite token cleared")
+
+
 # ── Status ───────────────────────────────────────────────────────────────────
 
 
 @app.command("status")
 def status() -> None:
     """Show system health overview."""
-    from skopaq.broker.token_manager import TokenManager
     from skopaq.config import SkopaqConfig
 
     config = SkopaqConfig()
-    mgr = TokenManager()
-    health = mgr.get_health()
+
+    # Get token health for the configured broker
+    if config.broker == "kite":
+        from skopaq.broker.kite_token_manager import KiteTokenManager
+        mgr = KiteTokenManager()
+        health = mgr.get_health()
+    else:
+        from skopaq.broker.token_manager import TokenManager
+        mgr = TokenManager()
+        health = mgr.get_health()
 
     # Detect configured LLMs
     llms = []
@@ -191,93 +293,164 @@ async def _run_analyze(symbol: str, trade_date: str):
 
 @app.command("trade")
 def trade(
-    symbol: str = typer.Argument(..., help="Stock symbol to trade (e.g., RELIANCE)."),
+    symbol: str = typer.Argument(None, help="Stock symbol (e.g., RELIANCE). Omit to auto-scan."),
     date: str = typer.Option("", help="Trade date (YYYY-MM-DD). Defaults to today."),
+    top: int = typer.Option(1, "--top", help="Number of candidates to trade (when auto-scanning)."),
+    watchlist: str = typer.Option("", "--watchlist", help="Comma-separated symbols to scan (instead of NIFTY 50)."),
+    no_monitor: bool = typer.Option(False, "--no-monitor", help="Skip position monitoring after trade."),
+    intraday: bool = typer.Option(False, "--intraday", help="Use MIS (intraday) product instead of CNC (delivery)."),
 ) -> None:
-    """Analyze and execute a trade for a symbol."""
+    """Analyze and execute trades.
+
+    With a symbol:   skopaq trade RELIANCE      (analyze + trade that symbol)
+    Without symbol:  skopaq trade               (auto-scan → trade best pick)
+    Multiple:        skopaq trade --top 3        (scan → trade top 3 candidates)
+    Intraday:        skopaq trade --intraday     (MIS product, forced EOD exit)
+    Custom list:     skopaq trade --watchlist "RELIANCE,TCS,INFY"
+
+    In paper mode, the full lifecycle runs automatically:
+    scan → analyze → trade → monitor → close → report.
+    """
     if not date:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     from skopaq.config import SkopaqConfig
     config = SkopaqConfig()
 
+    # --intraday flag overrides product to MIS
+    if intraday:
+        config.default_product = "MIS"
+
     # Double-confirmation gate for LIVE mode — real money at stake
     if config.trading_mode == "live":
+        target = symbol or f"auto-scan (top {top})"
         typer.echo(
-            "\n  ⚠  LIVE TRADING MODE — real orders will be placed on INDstocks.\n"
-            f"     Symbol: {symbol}    Date: {date}\n"
+            f"\n  !!  LIVE TRADING MODE — real orders will be placed.\n"
+            f"     Broker: {config.broker}\n"
+            f"     Target: {target}    Date: {date}\n"
         )
         if not typer.confirm("  Proceed with LIVE execution?", default=False):
             typer.echo("  Aborted.")
             raise typer.Exit()
 
-    display_trade_start(symbol, date, config.trading_mode)
-    result = asyncio.run(_run_trade(symbol, date))
+    if symbol:
+        # Explicit symbol — single trade flow
+        display_trade_start(symbol, date, config.trading_mode)
+        result = asyncio.run(_run_trade_full(
+            symbols=[symbol],
+            trade_date=date,
+            monitor=not no_monitor,
+        ))
+    else:
+        # Auto-scan → trade top N candidates
+        wl = [s.strip() for s in watchlist.split(",") if s.strip()] if watchlist else None
+        typer.echo(
+            f"\n  Auto-scan mode: finding top {top} candidate(s)"
+            + (f" from {wl}" if wl else " from NIFTY 50")
+            + f"  [{config.trading_mode}]\n"
+        )
+        result = asyncio.run(_run_trade_full(
+            symbols=None,
+            trade_date=date,
+            max_candidates=top,
+            custom_watchlist=wl,
+            monitor=not no_monitor,
+        ))
 
-    if result.error:
+    # Display results
+    if isinstance(result, dict) and "report" in result:
+        display_daemon_report(result["report"])
+    elif hasattr(result, "error") and result.error:
         display_error(result.error)
         raise typer.Exit(code=1)
+    elif hasattr(result, "signal"):
+        display_trade_result(result)
 
-    display_trade_result(result)
 
+async def _run_trade_full(
+    symbols: list[str] | None,
+    trade_date: str,
+    max_candidates: int = 1,
+    custom_watchlist: list[str] | None = None,
+    monitor: bool = True,
+) -> dict:
+    """Full-lifecycle trade: scan → analyze → trade → monitor → close → report.
 
-async def _run_trade(symbol: str, trade_date: str):
-    """Helper to run async trade.
+    When ``symbols`` is provided, skips the scanner and trades those symbols.
+    When ``symbols`` is None, runs the scanner to discover candidates.
 
-    For paper mode, this function:
-        1. Uses relaxed safety rules (no market-hours or stop-loss gate).
-        2. Fetches a real-time quote from INDstocks and injects it into the
-           paper engine so ``execute_order()`` can simulate a fill.
-        3. Wires the trade lifecycle manager for auto-reflection on SELL.
+    In paper mode, the full cycle runs including position monitoring.
+    In live mode, monitoring is optional (controlled by ``monitor`` flag).
+
+    Returns a dict with ``{"report": DaemonSessionReport}`` for the CLI
+    to display, or a single AnalysisResult if only one symbol was traded.
     """
+    import signal as sig
+
+    from skopaq.broker.market_data import MarketDataProvider
     from skopaq.broker.paper_engine import PaperEngine
     from skopaq.config import SkopaqConfig
     from skopaq.constants import (
         CRYPTO_PAPER_SAFETY_RULES, CRYPTO_SAFETY_RULES,
+        INTRADAY_PAPER_SAFETY_RULES, INTRADAY_SAFETY_RULES,
         PAPER_SAFETY_RULES, SAFETY_RULES,
     )
+    from skopaq.execution.daemon import DaemonSessionReport
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.safety_checker import SafetyChecker
     from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-
     from skopaq.risk.position_sizer import PositionSizer
 
     config = SkopaqConfig()
     is_crypto = config.asset_class == "crypto"
+    is_paper = config.trading_mode == "paper"
+    is_intraday = config.default_product == "MIS"
 
-    # Paper engine — crypto uses % brokerage + USDT capital
+    report = DaemonSessionReport(
+        session_date=trade_date,
+    )
+
+    # ── 1. Market data + paper engine ────────────────────────────────
+    market_data = MarketDataProvider(config)
+
     if is_crypto:
         paper = PaperEngine(
             initial_capital=config.initial_paper_capital,
-            brokerage_pct=0.001,         # 0.1% Binance spot fee
+            brokerage_pct=0.001,
             currency_label="USDT",
+            market_data=market_data,
         )
     else:
-        paper = PaperEngine(initial_capital=config.initial_paper_capital)
+        paper = PaperEngine(
+            initial_capital=config.initial_paper_capital,
+            market_data=market_data,
+        )
 
-    # Choose safety rules based on trading mode + asset class
     if is_crypto:
-        rules = CRYPTO_PAPER_SAFETY_RULES if config.trading_mode == "paper" else CRYPTO_SAFETY_RULES
+        rules = CRYPTO_PAPER_SAFETY_RULES if is_paper else CRYPTO_SAFETY_RULES
+    elif is_intraday:
+        rules = INTRADAY_PAPER_SAFETY_RULES if is_paper else INTRADAY_SAFETY_RULES
     else:
-        rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+        rules = PAPER_SAFETY_RULES if is_paper else SAFETY_RULES
 
-    # Wire live broker client when in live mode
+    # ── 2. Broker client ────────────────────────────────────────────
     live_client = None
+    broker_client = None
     if config.trading_mode == "live":
-        from skopaq.broker.client import INDstocksClient
-        from skopaq.broker.token_manager import TokenManager
-
-        token_mgr = TokenManager()
-        live_client = INDstocksClient(config, token_mgr)
+        live_client = _create_live_client(config)
+        broker_client = live_client
+    else:
+        try:
+            broker_client = _create_live_client(config)
+        except Exception:
+            logger.info("No broker token — using yfinance for market data")
 
     router = OrderRouter(config, paper, live_client=live_client)
     safety = SafetyChecker(
         rules=rules,
         max_sector_concentration_pct=config.max_sector_concentration_pct,
     )
-
-    # ATR-based position sizer (optional — also works for crypto via yfinance)
     sizer = None
     if config.position_sizing_enabled:
         sizer = PositionSizer(
@@ -285,123 +458,229 @@ async def _run_trade(symbol: str, trade_date: str):
             atr_multiplier=config.atr_multiplier,
             atr_period=config.atr_period,
         )
-
-    executor = Executor(router, safety, position_sizer=sizer)
-
-    # For paper mode, inject a real-time quote so the fill simulation has a price.
-    if config.trading_mode == "paper":
-        if is_crypto:
-            await _inject_crypto_quote(config, paper, symbol)
-        else:
-            await _inject_paper_quote(config, paper, symbol)
-
-    # Compute regime and calendar scales for position sizing
-    # (India VIX + NSE calendar are irrelevant for crypto — skip)
-    if is_crypto:
-        regime_scale, calendar_scale = 1.0, 1.0
-    else:
-        regime_scale, calendar_scale = _compute_risk_scales(config, trade_date)
-
-    upstream_config = _build_upstream_config(config)
-
-    # For crypto, translate BTCUSDT → BTC-USD for yfinance-based analysis
-    if is_crypto:
-        from skopaq.broker.crypto_symbols import to_yfinance_ticker
-        analysis_symbol = to_yfinance_ticker(symbol)
-        # Store the original Binance symbol for trade record building
-        upstream_config["_trade_symbol"] = symbol
-        logger.info("Crypto: %s → analysis as %s", symbol, analysis_symbol)
-    else:
-        analysis_symbol = symbol
-
-    # Load persisted memories + wire lifecycle manager
-    memory_store = _create_memory_store(config)
-    analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
-    graph = SkopaqTradingGraph(
-        upstream_config, executor,
-        selected_analysts=analysts,
-        memory_store=memory_store,
+    executor = Executor(
+        router, safety,
+        position_sizer=sizer,
+        product=config.default_product,
     )
 
-    # Open live client context if wired (INDstocksClient requires async with)
-    if live_client is not None:
-        await live_client.__aenter__()
+    # Open broker context
+    if broker_client is not None:
+        try:
+            await broker_client.__aenter__()
+            market_data.set_broker_client(broker_client)
+        except Exception:
+            logger.info("Broker client open failed — using yfinance fallback")
+            broker_client = None
 
+    # ── 3. Discover symbols (scan if needed) ─────────────────────────
     try:
-        result = await graph.analyze_and_execute(
-            analysis_symbol, trade_date,
-            regime_scale=regime_scale,
-            calendar_scale=calendar_scale,
+        if symbols:
+            trade_symbols = symbols
+            logger.info("Explicit symbols: %s", trade_symbols)
+        else:
+            logger.info("Running scanner to find top %d candidate(s)...", max_candidates)
+            try:
+                candidates = await _run_scan(
+                    max_candidates,
+                )
+                report.candidates_scanned = len(candidates)
+                trade_symbols = [c.symbol for c in candidates[:max_candidates]]
+                logger.info(
+                    "Scanner found %d candidates: %s",
+                    len(trade_symbols), trade_symbols,
+                )
+                if not trade_symbols:
+                    logger.info("No candidates found — nothing to trade")
+                    return {"report": report}
+            except Exception as exc:
+                logger.error("Scanner failed: %s", exc, exc_info=True)
+                report.errors.append(f"Scanner error: {exc}")
+                return {"report": report}
+
+        # ── 4. Analyze + trade each symbol ───────────────────────────
+        upstream_config = _build_upstream_config(config)
+        memory_store = _create_memory_store(config)
+        analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
+        graph = SkopaqTradingGraph(
+            upstream_config, executor,
+            selected_analysts=analysts,
+            memory_store=memory_store,
         )
+
+        regime_scale, calendar_scale = (
+            (1.0, 1.0) if is_crypto
+            else _compute_risk_scales(config, trade_date)
+        )
+
+        buys_placed = 0
+        for sym in trade_symbols:
+            report.candidates_analyzed += 1
+            logger.info("Analyzing %s...", sym)
+
+            # Pre-warm quote cache
+            try:
+                await market_data.get_quote(sym)
+            except Exception:
+                logger.debug("Quote pre-warm failed for %s", sym)
+
+            try:
+                result = await graph.analyze_and_execute(
+                    sym, trade_date,
+                    regime_scale=regime_scale,
+                    calendar_scale=calendar_scale,
+                )
+            except Exception as exc:
+                logger.error("Analysis failed for %s: %s", sym, exc, exc_info=True)
+                report.errors.append(f"{sym}: {exc}")
+                continue
+
+            if result.error:
+                report.errors.append(f"{sym}: {result.error}")
+                continue
+
+            if result.signal is None or result.signal.action == "HOLD":
+                report.holds += 1
+                logger.info("[%s] Decision: HOLD", sym)
+                continue
+
+            if result.signal.action == "BUY":
+                if result.execution and result.execution.success:
+                    buys_placed += 1
+                    report.trades_opened += 1
+                    logger.info(
+                        "[%s] BUY EXECUTED — fill=%.2f qty=%s",
+                        sym,
+                        result.execution.fill_price or 0,
+                        result.signal.quantity,
+                    )
+
+                    # Reflection
+                    if config.reflection_enabled and memory_store:
+                        try:
+                            await _run_lifecycle(config, graph, memory_store, result)
+                        except Exception:
+                            logger.debug("Lifecycle failed for %s", sym, exc_info=True)
+                else:
+                    report.trades_rejected += 1
+                    reason = (
+                        result.execution.rejection_reason
+                        if result.execution else "no execution result"
+                    )
+                    logger.warning("[%s] BUY REJECTED: %s", sym, reason)
+
+            # For single-symbol non-monitored mode, return the raw result
+            if len(trade_symbols) == 1 and not monitor:
+                return result
+
+        # ── 5. Monitor positions ─────────────────────────────────────
+        if monitor and buys_placed > 0:
+            from skopaq.execution.position_monitor import PositionMonitor
+
+            logger.info(
+                "Starting position monitor (%d position(s))...",
+                buys_placed,
+            )
+
+            stop_event = asyncio.Event()
+
+            def _handle_sigint(*_):
+                logger.info("Ctrl+C — shutting down monitor...")
+                stop_event.set()
+
+            loop = asyncio.get_running_loop()
+            try:
+                loop.add_signal_handler(sig.SIGINT, _handle_sigint)
+            except NotImplementedError:
+                pass  # Windows
+
+            # Build LLM for sell analyst
+            llm = None
+            try:
+                from skopaq.llm import bridge_env_vars, build_llm_map
+                bridge_env_vars(config)
+                llm_map = build_llm_map()
+                llm = llm_map.get("sell_analyst", llm_map.get("_default"))
+            except Exception:
+                logger.debug("No LLM for sell analyst — rule-based only")
+
+            mon = PositionMonitor(
+                executor=executor,
+                market_data=market_data,
+                router=router,
+                config=config,
+                llm=llm,
+                stop_event=stop_event,
+                ai_enabled=llm is not None,
+            )
+            monitor_result = await mon.run()
+            report.monitor_result = monitor_result
+            report.sells_executed = monitor_result.sells_executed
+            report.sells_failed = monitor_result.sells_failed
+            report.gross_pnl = monitor_result.total_pnl
+        elif buys_placed == 0:
+            logger.info("No positions opened — skipping monitor")
+
+        # ── 6. Close remaining positions ─────────────────────────────
+        if buys_placed > 0:
+            try:
+                positions = await router.get_positions()
+                open_pos = [p for p in positions if p.quantity > 0]
+                if open_pos:
+                    from decimal import Decimal
+                    from skopaq.broker.models import TradingSignal
+
+                    logger.info("Closing %d remaining position(s)...", len(open_pos))
+                    for pos in open_pos:
+                        try:
+                            signal = TradingSignal(
+                                symbol=pos.symbol, action="SELL",
+                                confidence=100,
+                                entry_price=pos.average_price,
+                                quantity=Decimal(int(pos.quantity)),
+                                reasoning="Session close: auto-sell remaining positions",
+                            )
+                            sell_result = await executor.execute_signal(signal)
+                            if sell_result.success:
+                                logger.info("Closed %s", pos.symbol)
+                            else:
+                                logger.warning(
+                                    "Close rejected for %s: %s",
+                                    pos.symbol, sell_result.rejection_reason,
+                                )
+                        except Exception:
+                            logger.error("Close failed for %s", pos.symbol, exc_info=True)
+            except Exception:
+                logger.debug("Position check failed during close", exc_info=True)
+
     finally:
-        if live_client is not None:
-            await live_client.__aexit__(None, None, None)
+        # Clean up broker session
+        if broker_client is not None:
+            try:
+                await broker_client.__aexit__(None, None, None)
+            except Exception:
+                pass
 
-    # Post-execution: track lifecycle (BUY/SELL linkage + reflection)
-    if config.reflection_enabled and memory_store is not None:
-        await _run_lifecycle(config, graph, memory_store, result)
-
-    return result
+    return {"report": report}
 
 
-async def _inject_paper_quote(config, paper, symbol: str) -> None:
-    """Fetch a real quote from INDstocks and inject it into the paper engine.
+def _create_live_client(config):
+    """Create the appropriate live broker client based on config.broker.
 
-    The paper engine requires a Quote in its ``_quotes`` cache before
-    ``execute_order()`` can simulate a fill.  Without this, it returns
-    "No quote available for {symbol}".
+    Returns an INDstocksClient or KiteConnectClient (both are async context managers).
     """
-    from skopaq.broker.client import INDstocksClient
-    from skopaq.broker.scrip_resolver import resolve_scrip_code
-    from skopaq.broker.token_manager import TokenManager
+    if config.broker == "kite":
+        from skopaq.broker.kite_client import KiteConnectClient
+        from skopaq.broker.kite_token_manager import KiteTokenManager
 
-    token_mgr = TokenManager()
-    client = INDstocksClient(config, token_mgr)
+        token_mgr = KiteTokenManager()
+        return KiteConnectClient(config, token_mgr)
+    else:
+        from skopaq.broker.client import INDstocksClient
+        from skopaq.broker.token_manager import TokenManager
 
-    try:
-        async with client:
-            scrip_code = await resolve_scrip_code(client, symbol)
-            logger.info("Resolved %s → %s", symbol, scrip_code)
-
-            quote = await client.get_quote(scrip_code, symbol=symbol)
-            paper.update_quote(quote)
-            logger.info(
-                "Injected quote: %s LTP=%.2f bid=%.2f ask=%.2f",
-                symbol, quote.ltp, quote.bid, quote.ask,
-            )
-    except Exception as exc:
-        logger.warning(
-            "Could not fetch quote for %s — paper fill may fail: %s",
-            symbol, exc,
-        )
-
-
-async def _inject_crypto_quote(config, paper, symbol: str) -> None:
-    """Fetch a real quote from Binance and inject it into the paper engine.
-
-    The paper engine requires a Quote in its ``_quotes`` cache before
-    ``execute_order()`` can simulate a fill.  Uses the Binance public
-    24hr ticker endpoint (no authentication needed).
-    """
-    from skopaq.broker.binance_client import BinanceClient
-    from skopaq.broker.crypto_symbols import to_binance_pair
-
-    pair = to_binance_pair(symbol)
-    client = BinanceClient(base_url=config.binance_base_url)
-
-    try:
-        async with client:
-            quote = await client.get_quote(pair)
-            paper.update_quote(quote)
-            logger.info(
-                "Injected crypto quote: %s LTP=%.2f bid=%.2f ask=%.2f",
-                pair, quote.ltp, quote.bid, quote.ask,
-            )
-    except Exception as exc:
-        logger.warning(
-            "Could not fetch crypto quote for %s — paper fill may fail: %s",
-            pair, exc,
-        )
+        token_mgr = TokenManager()
+        return INDstocksClient(config, token_mgr)
 
 
 # ── Scan ──────────────────────────────────────────────────────────────────────
@@ -461,41 +740,29 @@ async def _run_scan(max_candidates: int):
     else:
         watchlist = Watchlist()
 
+        # Use MarketDataProvider for broker-agnostic quote fetching.
+        # This supports all brokers (Kite, INDstocks) + free fallbacks
+        # (Angel One, Upstox, yfinance) automatically.
+        from skopaq.broker.market_data import MarketDataProvider
+
+        _scanner_market_data = MarketDataProvider(config)
+
         async def quote_fetcher(symbols: list[str]) -> list[dict]:
-            """Batch-fetch INDstocks quotes for equity symbols."""
-            from skopaq.broker.client import INDstocksClient
-            from skopaq.broker.scrip_resolver import resolve_scrip_code
-            from skopaq.broker.token_manager import TokenManager
-
-            token_mgr = TokenManager()
-            async with INDstocksClient(config, token_mgr) as client:
-                # Resolve all symbols → scrip codes (instruments CSV cached 1h)
-                resolved: list[tuple[str, str]] = []
-                for sym in symbols:
-                    try:
-                        code = await resolve_scrip_code(client, sym)
-                        resolved.append((sym, code))
-                    except ValueError:
-                        logger.debug("Scrip resolve failed: %s", sym)
-
-                if not resolved:
-                    return []
-
-                syms, codes = zip(*resolved)
-                raw_quotes = await client.get_quotes(list(codes), symbols=list(syms))
-
-                return [
-                    {
-                        "symbol": q.symbol,
-                        "ltp": q.ltp,
-                        "open": q.open,
-                        "high": q.high,
-                        "low": q.low,
-                        "close": q.close,
-                        "volume": q.volume,
-                    }
-                    for q in raw_quotes
-                ]
+            """Batch-fetch quotes via MarketDataProvider (any broker/source)."""
+            quotes = await _scanner_market_data.get_quotes(symbols)
+            return [
+                {
+                    "symbol": q.symbol,
+                    "ltp": q.ltp,
+                    "open": q.open,
+                    "high": q.high,
+                    "low": q.low,
+                    "close": q.close,
+                    "volume": q.volume,
+                }
+                for q in quotes
+                if q.ltp > 0
+            ]
 
     # ── LLM screener factories ───────────────────────────────────────
 
@@ -574,33 +841,52 @@ async def _run_monitor(config, ai_enabled: bool):
     """Async helper to run the position monitor."""
     import signal as sig
 
-    from skopaq.broker.client import INDstocksClient
-    from skopaq.broker.token_manager import TokenManager
+    from skopaq.broker.market_data import MarketDataProvider
     from skopaq.constants import PAPER_SAFETY_RULES, SAFETY_RULES
     from skopaq.execution.executor import Executor
     from skopaq.execution.order_router import OrderRouter
     from skopaq.execution.position_monitor import PositionMonitor
     from skopaq.execution.safety_checker import SafetyChecker
 
-    # Always need an INDstocksClient for LTP polling
-    token_mgr = TokenManager()
-    client = INDstocksClient(config, token_mgr)
+    # MarketDataProvider — handles all LTP/quote fetching for any broker
+    market_data = MarketDataProvider(config)
 
     # Wire live or paper backend
     from skopaq.broker.paper_engine import PaperEngine
 
-    paper = PaperEngine(initial_capital=config.initial_paper_capital)
+    paper = PaperEngine(
+        initial_capital=config.initial_paper_capital,
+        market_data=market_data,
+    )
     live_client = None
+    broker_client = None
+
     if config.trading_mode == "live":
-        live_client = client  # reuse same client
+        live_client = _create_live_client(config)
+        broker_client = live_client
+    else:
+        # Paper mode — try to attach broker for real market data
+        try:
+            broker_client = _create_live_client(config)
+        except Exception:
+            logger.info("No broker token — using yfinance for market data")
 
     router = OrderRouter(config, paper, live_client=live_client)
-    rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+
+    from skopaq.constants import (
+        INTRADAY_PAPER_SAFETY_RULES, INTRADAY_SAFETY_RULES,
+    )
+    is_intraday = config.default_product == "MIS"
+    if is_intraday:
+        rules = INTRADAY_PAPER_SAFETY_RULES if config.trading_mode == "paper" else INTRADAY_SAFETY_RULES
+    else:
+        rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+
     safety = SafetyChecker(
         rules=rules,
         max_sector_concentration_pct=config.max_sector_concentration_pct,
     )
-    executor = Executor(router, safety)
+    executor = Executor(router, safety, product=config.default_product)
 
     # Build LLM for sell analyst (if AI enabled)
     llm = None
@@ -630,11 +916,15 @@ async def _run_monitor(config, ai_enabled: bool):
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(sig.SIGINT, _handle_sigint)
 
-    # Run monitor within client context
-    async with client:
+    # Open broker client context and wire into market data provider
+    if broker_client is not None:
+        await broker_client.__aenter__()
+        market_data.set_broker_client(broker_client)
+
+    try:
         monitor_instance = PositionMonitor(
             executor=executor,
-            client=client,
+            market_data=market_data,
             router=router,
             config=config,
             llm=llm,
@@ -642,6 +932,9 @@ async def _run_monitor(config, ai_enabled: bool):
             ai_enabled=ai_enabled,
         )
         return await monitor_instance.run()
+    finally:
+        if broker_client is not None:
+            await broker_client.__aexit__(None, None, None)
 
 
 # ── Daemon ───────────────────────────────────────────────────────────────────

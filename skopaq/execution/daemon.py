@@ -107,7 +107,8 @@ class TradingDaemon:
         self._scan_delay = config.daemon_scan_delay_after_open_seconds
 
         # Built during PRE_OPEN
-        self._client = None       # INDstocksClient
+        self._client = None       # INDstocksClient or KiteConnectClient
+        self._market_data = None  # MarketDataProvider
         self._router = None       # OrderRouter
         self._executor = None     # Executor
         self._graph = None        # SkopaqTradingGraph
@@ -249,11 +250,10 @@ class TradingDaemon:
 
     async def _phase_pre_open(self) -> None:
         """Validate token, build LLM map, create executor stack."""
-        from skopaq.broker.client import INDstocksClient
         from skopaq.broker.paper_engine import PaperEngine
-        from skopaq.broker.token_manager import TokenManager
         from skopaq.cli.main import (
             _build_upstream_config,
+            _create_live_client,
             _create_memory_store,
         )
         from skopaq.execution.executor import Executor
@@ -265,24 +265,36 @@ class TradingDaemon:
 
         config = self._config
 
-        # 1. Validate INDstocks token
-        token_mgr = TokenManager()
-        health = token_mgr.get_health()
-        if not health.valid:
-            raise RuntimeError(
-                f"INDstocks token invalid: {health.warning}. "
-                "Run `skopaq token set <token>` first."
-            )
+        # 1. Validate broker token (INDstocks or Kite)
+        if config.broker == "kite":
+            from skopaq.broker.kite_token_manager import KiteTokenManager
+            token_mgr = KiteTokenManager()
+            health = token_mgr.get_health()
+            if not health.valid:
+                raise RuntimeError(
+                    f"Kite token invalid: {health.warning}. "
+                    "Run `skopaq kite session <request_token>` first."
+                )
+        else:
+            from skopaq.broker.token_manager import TokenManager
+            token_mgr = TokenManager()
+            health = token_mgr.get_health()
+            if not health.valid:
+                raise RuntimeError(
+                    f"INDstocks token invalid: {health.warning}. "
+                    "Run `skopaq token set <token>` first."
+                )
         logger.info("Token valid — expires in %s", health.remaining)
 
         # 2. Open broker client session
-        self._client = INDstocksClient(config, token_mgr)
+        self._client = _create_live_client(config)
         await self._client.__aenter__()
 
         # Validate token against API
         profile = await self._client.get_profile()
         logger.info(
-            "Broker session open — user=%s",
+            "Broker session open — broker=%s user=%s",
+            config.broker,
             profile.name or profile.email or "unknown",
         )
 
@@ -291,9 +303,17 @@ class TradingDaemon:
         self._llm_map = build_llm_map()
         logger.info("LLM map built: %d roles", len(self._llm_map))
 
-        # 4. Build executor stack
+        # 4. Build executor stack with MarketDataProvider
+        from skopaq.broker.market_data import MarketDataProvider
+
         is_paper = config.trading_mode == "paper"
-        paper = PaperEngine(initial_capital=config.initial_paper_capital)
+        self._market_data = MarketDataProvider(config)
+        self._market_data.set_broker_client(self._client)
+
+        paper = PaperEngine(
+            initial_capital=config.initial_paper_capital,
+            market_data=self._market_data,
+        )
 
         live_client = None if is_paper else self._client
         self._router = OrderRouter(config, paper, live_client=live_client)
@@ -312,7 +332,11 @@ class TradingDaemon:
                 atr_period=config.atr_period,
             )
 
-        self._executor = Executor(self._router, safety, position_sizer=sizer)
+        self._executor = Executor(
+            self._router, safety,
+            position_sizer=sizer,
+            product=config.default_product,
+        )
 
         # 5. Build analysis graph
         upstream_config = _build_upstream_config(config)
@@ -408,16 +432,14 @@ class TradingDaemon:
                 candidate.urgency,
             )
 
-            # For paper mode, inject a real-time quote
+            # Pre-warm the quote cache so analysis and fills have fresh data.
+            # MarketDataProvider handles this automatically on execute_order_async(),
+            # but pre-warming improves the entry_price resolution in the executor.
             if config.trading_mode == "paper":
                 try:
-                    from skopaq.cli.main import _inject_paper_quote
-                    paper_engine = self._router._paper  # noqa: SLF001
-                    await _inject_paper_quote(config, paper_engine, symbol)
+                    await self._market_data.get_quote(symbol)
                 except Exception:
-                    logger.warning(
-                        "Quote injection failed for %s", symbol, exc_info=True,
-                    )
+                    logger.debug("Quote pre-warm failed for %s", symbol)
 
             try:
                 result = await self._graph.analyze_and_execute(
@@ -502,7 +524,7 @@ class TradingDaemon:
 
         monitor = PositionMonitor(
             executor=self._executor,
-            client=self._client,
+            market_data=self._market_data,
             router=self._router,
             config=self._config,
             llm=llm,

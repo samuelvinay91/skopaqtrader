@@ -3,15 +3,21 @@
 Maintains virtual capital, positions, and P&L.  Uses the same interface
 as live order execution so switching from paper → live only changes
 the execution backend.
+
+When a ``MarketDataProvider`` is attached, the engine auto-refreshes
+quotes before every fill and P&L calculation — no manual quote injection
+needed.  Without a provider, the engine still works via explicit
+``update_quote()`` calls (backward-compatible).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
 from skopaq.broker.models import (
@@ -30,6 +36,9 @@ from skopaq.broker.models import (
     TradingSignal,
 )
 
+if TYPE_CHECKING:
+    from skopaq.broker.market_data import MarketDataProvider
+
 logger = logging.getLogger(__name__)
 
 # Default simulation parameters
@@ -46,6 +55,7 @@ class PaperEngine:
         initial_capital: Starting cash in INR (default 10 lakh).
         slippage_pct: Simulated slippage as a fraction (default 0.1%).
         brokerage: Flat brokerage per order in INR (default 5).
+        market_data: Optional MarketDataProvider for auto-refreshing quotes.
     """
 
     def __init__(
@@ -55,6 +65,7 @@ class PaperEngine:
         brokerage: float = DEFAULT_BROKERAGE_INR,
         brokerage_pct: float = 0.0,
         currency_label: str = "INR",
+        market_data: Optional[MarketDataProvider] = None,
     ) -> None:
         self._initial_capital = Decimal(str(initial_capital))
         self._cash = Decimal(str(initial_capital))
@@ -62,6 +73,7 @@ class PaperEngine:
         self._brokerage = Decimal(str(brokerage))
         self._brokerage_pct = Decimal(str(brokerage_pct))
         self._currency_label = currency_label
+        self._market_data = market_data
 
         # {symbol: Position}
         self._positions: dict[str, Position] = {}
@@ -69,24 +81,71 @@ class PaperEngine:
         # Completed order history
         self._orders: list[OrderResponse] = []
 
-        # Latest quotes cache — updated by websocket or manual refresh
+        # Latest quotes cache — updated by websocket, manual refresh,
+        # or auto-refreshed by MarketDataProvider before fills
         self._quotes: dict[str, Quote] = {}
 
         # Daily P&L tracking
         self._day_pnl = Decimal("0")
         self._trade_count = 0
 
+    # ── Market data source ──────────────────────────────────────────────
+
+    def set_market_data(self, provider: MarketDataProvider) -> None:
+        """Attach a MarketDataProvider for automatic quote refresh.
+
+        When set, the engine fetches fresh quotes from broker/yfinance/cache
+        before every fill — no manual ``update_quote()`` calls needed.
+        """
+        self._market_data = provider
+
     # ── Quote management ─────────────────────────────────────────────────
 
     def update_quote(self, quote: Quote) -> None:
-        """Update cached quote for a symbol (called by websocket handler)."""
+        """Update cached quote for a symbol.
+
+        Called by WebSocket handlers, manual injection, or the
+        MarketDataProvider during auto-refresh.
+        """
         self._quotes[quote.symbol] = quote
+        # Also push to MarketDataProvider cache if attached
+        if self._market_data is not None:
+            self._market_data.inject_quote(quote)
 
     def get_quote(self, symbol: str) -> Optional[Quote]:
         """Get the last known quote for a symbol."""
         return self._quotes.get(symbol)
 
+    async def refresh_quote(self, symbol: str) -> Optional[Quote]:
+        """Fetch a fresh quote via the MarketDataProvider.
+
+        Falls back to the cached quote if no provider is attached.
+        """
+        if self._market_data is not None:
+            quote = await self._market_data.get_quote(symbol)
+            if quote.ltp > 0:
+                self._quotes[symbol] = quote
+                return quote
+        return self._quotes.get(symbol)
+
     # ── Order execution ──────────────────────────────────────────────────
+
+    async def execute_order_async(
+        self,
+        order: OrderRequest,
+        signal: Optional[TradingSignal] = None,
+    ) -> ExecutionResult:
+        """Simulate order execution with auto-refreshed quotes.
+
+        Like ``execute_order()`` but fetches a fresh quote from the
+        MarketDataProvider before filling.  Use this when a provider
+        is attached for live-like paper trading.
+        """
+        if self._market_data is not None:
+            quote = await self._market_data.get_quote(order.symbol)
+            if quote.ltp > 0:
+                self._quotes[order.symbol] = quote
+        return self.execute_order(order, signal)
 
     def execute_order(
         self,
@@ -97,6 +156,9 @@ class PaperEngine:
 
         Returns an ``ExecutionResult`` indicating success/failure, fill price,
         slippage, and brokerage.
+
+        Prefer ``execute_order_async()`` when a MarketDataProvider is
+        attached — it auto-refreshes quotes before filling.
         """
         quote = self._quotes.get(order.symbol)
         if quote is None:
@@ -296,6 +358,21 @@ class PaperEngine:
                 pos = pos.model_copy(update={"last_price": quote.ltp, "pnl": round(pnl, 2)})
             result.append(pos)
         return result
+
+    async def get_positions_live(self) -> list[Position]:
+        """Return positions with live-refreshed P&L from MarketDataProvider.
+
+        Like ``get_positions()`` but fetches fresh quotes for all open
+        positions before computing P&L.
+        """
+        if self._market_data is not None:
+            symbols = list(self._positions.keys())
+            if symbols:
+                quotes = await self._market_data.get_quotes(symbols)
+                for q in quotes:
+                    if q.ltp > 0:
+                        self._quotes[q.symbol] = q
+        return self.get_positions()
 
     def get_holdings(self) -> list[Holding]:
         """Return positions formatted as holdings (for CNC delivery positions)."""

@@ -42,15 +42,20 @@ def config():
     cfg.trading_mode = "paper"
     cfg.initial_paper_capital = 100_000
     cfg.max_sector_concentration_pct = 0.40
+    cfg.daemon_min_profit_threshold_pct = 0.5
+    cfg.daemon_min_profit_threshold_inr = 150.0
     return cfg
 
 
 @pytest.fixture
-def mock_client():
-    """Mock INDstocksClient with LTP support."""
-    client = AsyncMock()
-    client.get_ltp = AsyncMock(return_value=100.0)
-    return client
+def mock_market_data():
+    """Mock MarketDataProvider for LTP/quote fetching."""
+    md = AsyncMock()
+    md.get_ltp = AsyncMock(return_value=100.0)
+    md.get_quote = AsyncMock(return_value=Quote(
+        symbol="TEST", ltp=100.0, bid=99.9, ask=100.1,
+    ))
+    return md
 
 
 @pytest.fixture
@@ -89,13 +94,13 @@ def mock_llm():
 
 
 def _make_monitor(
-    executor, client, router, config,
+    executor, market_data, router, config,
     llm=None, stop_event=None, ai_enabled=True,
 ) -> PositionMonitor:
     """Helper to build a PositionMonitor with mocks."""
     return PositionMonitor(
         executor=executor,
-        client=client,
+        market_data=market_data,
         router=router,
         config=config,
         llm=llm,
@@ -116,8 +121,7 @@ class TestSafetyTier:
             MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
         )
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
         )
         # LTP at 95 = 5% below entry > 4% threshold
         reason = mon._check_safety(pos, ltp=95.0)
@@ -130,12 +134,9 @@ class TestSafetyTier:
             MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
         )
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
         )
         # LTP at 98 = 2% below entry < 4% threshold
-        reason = mon._check_safety(pos, ltp=98.0)
-        # Should only be None if not EOD time
         # Patch time to be during market hours (not EOD)
         with patch(
             "skopaq.execution.position_monitor.datetime"
@@ -153,8 +154,7 @@ class TestSafetyTier:
             MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
         )
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
             high_water_mark=110.0,  # Price went up to 110
         )
         # LTP at 107.5 — within 2% of HWM (trail = 110 * 0.98 = 107.8)
@@ -175,8 +175,7 @@ class TestSafetyTier:
             MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
         )
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
             high_water_mark=110.0,
         )
         # LTP at 109 — above trail (110 * 0.98 = 107.8)
@@ -195,8 +194,7 @@ class TestSafetyTier:
             MagicMock(), MagicMock(), MagicMock(), config, ai_enabled=False,
         )
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
         )
         # Mock time to 15:25 IST (past 15:20 threshold)
         with patch(
@@ -232,8 +230,7 @@ class TestAITier:
             return_value=sell_decision,
         ):
             pos = MonitoredPosition(
-                symbol="TEST", scrip_code="NSE_123",
-                entry_price=100.0, quantity=10,
+                symbol="TEST", entry_price=100.0, quantity=10,
             )
             decision = await mon._check_ai(pos, ltp=105.0, pnl_pct=5.0)
             assert decision is not None
@@ -256,8 +253,7 @@ class TestAITier:
             return_value=hold_decision,
         ):
             pos = MonitoredPosition(
-                symbol="TEST", scrip_code="NSE_123",
-                entry_price=100.0, quantity=10,
+                symbol="TEST", entry_price=100.0, quantity=10,
             )
             decision = await mon._check_ai(pos, ltp=102.0, pnl_pct=2.0)
             assert decision is not None
@@ -271,8 +267,7 @@ class TestAITier:
             llm=None, ai_enabled=False,
         )
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
         )
         decision = await mon._check_ai(pos, ltp=102.0, pnl_pct=2.0)
         assert decision is None
@@ -286,18 +281,17 @@ class TestExecution:
 
     @pytest.mark.asyncio
     async def test_sell_uses_market_order(
-        self, config, mock_executor,
+        self, config, mock_executor, mock_market_data,
     ):
         """SELL signal should have entry_price set (not None) for P&L tracking."""
         mon = _make_monitor(
-            mock_executor, MagicMock(), MagicMock(), config, ai_enabled=False,
+            mock_executor, mock_market_data, MagicMock(), config, ai_enabled=False,
         )
         mon._router = MagicMock()
         mon._router._paper = MagicMock()
 
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
         )
         result = MonitorResult()
         ok = await mon._execute_sell(pos, ltp=95.0, reason="test stop", result=result)
@@ -315,35 +309,31 @@ class TestExecution:
 
     @pytest.mark.asyncio
     async def test_paper_mode_injects_quote(
-        self, config, mock_executor,
+        self, config, mock_executor, mock_market_data,
     ):
-        """In paper mode, a Quote should be injected before selling."""
+        """In paper mode, a Quote should be fetched and injected before selling."""
         mock_paper = MagicMock()
         mock_router = MagicMock()
         mock_router._paper = mock_paper
 
         mon = _make_monitor(
-            mock_executor, MagicMock(), mock_router, config, ai_enabled=False,
+            mock_executor, mock_market_data, mock_router, config, ai_enabled=False,
         )
-        # Override router reference
         mon._router = mock_router
 
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
         )
         result = MonitorResult()
         await mon._execute_sell(pos, ltp=95.0, reason="test stop", result=result)
 
-        # Paper engine should have received a quote update
+        # MarketDataProvider should have been called
+        mock_market_data.get_quote.assert_called_with("TEST")
+        # Paper engine should have received the quote update
         mock_paper.update_quote.assert_called_once()
-        quote = mock_paper.update_quote.call_args[0][0]
-        assert isinstance(quote, Quote)
-        assert quote.symbol == "TEST"
-        assert quote.ltp == 95.0
 
     @pytest.mark.asyncio
-    async def test_sell_failure_increments_failed_count(self, config):
+    async def test_sell_failure_increments_failed_count(self, config, mock_market_data):
         """Failed sell should increment sells_failed, not sells_executed."""
         executor = AsyncMock()
         fail_result = MagicMock()
@@ -352,14 +342,13 @@ class TestExecution:
         executor.execute_signal = AsyncMock(return_value=fail_result)
 
         mon = _make_monitor(
-            executor, MagicMock(), MagicMock(), config, ai_enabled=False,
+            executor, mock_market_data, MagicMock(), config, ai_enabled=False,
         )
         mon._router = MagicMock()
         mon._router._paper = MagicMock()
 
         pos = MonitoredPosition(
-            symbol="TEST", scrip_code="NSE_123",
-            entry_price=100.0, quantity=10,
+            symbol="TEST", entry_price=100.0, quantity=10,
         )
         result = MonitorResult()
         ok = await mon._execute_sell(pos, ltp=95.0, reason="test", result=result)
@@ -377,52 +366,43 @@ class TestMonitorRun:
 
     @pytest.mark.asyncio
     async def test_no_positions_exits_immediately(
-        self, config, mock_client, mock_executor,
+        self, config, mock_market_data, mock_executor,
     ):
         """Monitor should exit immediately if no positions are open."""
         router = AsyncMock()
         router.get_positions = AsyncMock(return_value=[])
 
-        # Patch resolve_scrip_code to avoid real API calls
-        with patch(
-            "skopaq.broker.scrip_resolver.resolve_scrip_code",
-            return_value="NSE_123",
-        ):
-            mon = _make_monitor(
-                mock_executor, mock_client, router, config, ai_enabled=False,
-            )
-            result = await mon.run()
+        mon = _make_monitor(
+            mock_executor, mock_market_data, router, config, ai_enabled=False,
+        )
+        result = await mon.run()
 
         assert result.positions_monitored == 0
         assert result.sells_executed == 0
 
     @pytest.mark.asyncio
     async def test_graceful_shutdown_on_stop_event(
-        self, config, mock_client, mock_router, mock_executor,
+        self, config, mock_market_data, mock_router, mock_executor,
     ):
         """Setting the stop event should cause the monitor to exit the loop."""
         stop_event = asyncio.Event()
 
-        with patch(
-            "skopaq.broker.scrip_resolver.resolve_scrip_code",
-            return_value="NSE_123",
-        ):
-            mon = _make_monitor(
-                mock_executor, mock_client, mock_router, config,
-                stop_event=stop_event, ai_enabled=False,
-            )
+        mon = _make_monitor(
+            mock_executor, mock_market_data, mock_router, config,
+            stop_event=stop_event, ai_enabled=False,
+        )
 
-            # Set stop event after a short delay
-            async def _set_stop():
-                await asyncio.sleep(0.1)
-                stop_event.set()
+        # Set stop event after a short delay
+        async def _set_stop():
+            await asyncio.sleep(0.1)
+            stop_event.set()
 
-            # Patch safety to not trigger (so the loop runs until stopped)
-            with patch.object(mon, "_check_safety", return_value=None):
-                with patch.object(mon, "_should_eod_exit", return_value=False):
-                    task = asyncio.create_task(_set_stop())
-                    result = await mon.run()
-                    await task
+        # Patch safety to not trigger (so the loop runs until stopped)
+        with patch.object(mon, "_check_safety", return_value=None):
+            with patch.object(mon, "_should_eod_exit", return_value=False):
+                task = asyncio.create_task(_set_stop())
+                result = await mon.run()
+                await task
 
         assert result.positions_monitored == 1
         # Should not have sold (no safety trigger)
@@ -432,36 +412,32 @@ class TestMonitorRun:
         self, config, mock_router, mock_executor,
     ):
         """Zero LTP should skip the position without crashing."""
-        client = AsyncMock()
-        client.get_ltp = AsyncMock(return_value=0.0)
+        market_data = AsyncMock()
+        market_data.get_ltp = AsyncMock(return_value=0.0)
 
         stop_event = asyncio.Event()
 
-        with patch(
-            "skopaq.broker.scrip_resolver.resolve_scrip_code",
-            return_value="NSE_123",
-        ):
-            mon = _make_monitor(
-                mock_executor, client, mock_router, config,
-                stop_event=stop_event, ai_enabled=False,
-            )
+        mon = _make_monitor(
+            mock_executor, market_data, mock_router, config,
+            stop_event=stop_event, ai_enabled=False,
+        )
 
-            # Let it run 1 cycle then stop
-            async def _stop_after():
-                await asyncio.sleep(0.2)
-                stop_event.set()
+        # Let it run 1 cycle then stop
+        async def _stop_after():
+            await asyncio.sleep(0.2)
+            stop_event.set()
 
-            with patch.object(mon, "_should_eod_exit", return_value=False):
-                task = asyncio.create_task(_stop_after())
-                result = await mon.run()
-                await task
+        with patch.object(mon, "_should_eod_exit", return_value=False):
+            task = asyncio.create_task(_stop_after())
+            result = await mon.run()
+            await task
 
         # Should not have sold (zero LTP skipped)
         assert result.sells_executed == 0
 
     @pytest.mark.asyncio
     async def test_safety_overrides_ai_hold(
-        self, config, mock_client, mock_router, mock_executor, mock_llm,
+        self, config, mock_market_data, mock_router, mock_executor, mock_llm,
     ):
         """Safety stop-loss should fire even if AI would say HOLD.
 
@@ -469,31 +445,27 @@ class TestMonitorRun:
         triggers, AI is never consulted.
         """
         # LTP well below stop-loss
-        mock_client.get_ltp = AsyncMock(return_value=90.0)  # 10% below entry
+        mock_market_data.get_ltp = AsyncMock(return_value=90.0)  # 10% below entry
 
         stop_event = asyncio.Event()
 
+        mon = _make_monitor(
+            mock_executor, mock_market_data, mock_router, config,
+            llm=mock_llm, stop_event=stop_event, ai_enabled=True,
+        )
+
+        # AI would say HOLD — but safety should override
         with patch(
-            "skopaq.broker.scrip_resolver.resolve_scrip_code",
-            return_value="NSE_123",
-        ):
-            mon = _make_monitor(
-                mock_executor, mock_client, mock_router, config,
-                llm=mock_llm, stop_event=stop_event, ai_enabled=True,
-            )
+            "skopaq.execution.position_monitor.analyze_exit",
+            return_value=SellDecision(action="HOLD", confidence=80),
+        ) as mock_ai:
+            with patch.object(mon, "_should_eod_exit", return_value=False):
+                result = await mon.run()
 
-            # AI would say HOLD — but safety should override
-            with patch(
-                "skopaq.execution.position_monitor.analyze_exit",
-                return_value=SellDecision(action="HOLD", confidence=80),
-            ) as mock_ai:
-                with patch.object(mon, "_should_eod_exit", return_value=False):
-                    result = await mon.run()
-
-            # Safety should have sold, AI should NOT have been called
-            assert result.sells_executed == 1
-            assert "HARD STOP" in result.exit_reasons[0]
-            mock_ai.assert_not_called()
+        # Safety should have sold, AI should NOT have been called
+        assert result.sells_executed == 1
+        assert "HARD STOP" in result.exit_reasons[0]
+        mock_ai.assert_not_called()
 
 
 # ── SellDecision Parsing Tests ───────────────────────────────────────────────

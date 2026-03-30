@@ -40,7 +40,8 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 - **Multi-model tiering** — Per-role LLM assignment across multiple providers for cost optimization and capability matching. See the [model tiering table](#multi-model-tiering) below for details.
 - **Semantic LLM Caching** — Built-in Redis LangCache provides significant speedup (up to ~45x in our benchmarks) on repeated queries and reduces API costs, with automatic semantic invalidation on memory updates.
 - **Advanced Risk Management** — Features ATR-based position sizing, India VIX/NIFTY SMA market regime detection, NSE event calendar handling (F&O expiry, RBI policy), and sector concentration limits.
-- **Live Algo Trading** — Integrates with the INDstocks broker API for execution on Indian equities (NSE/BSE). Start in paper mode, graduate to live when ready.
+- **Live Algo Trading** — Integrates with INDstocks and Kite Connect (Zerodha) broker APIs for execution on Indian equities (NSE/BSE). Start in paper mode, graduate to live when ready.
+- **Live-Data Paper Trading** — Paper mode uses real market data from any source (broker API, yfinance, Binance public) with automatic fallback. No broker credentials required to paper trade.
 - **Confidence-Scored Position Sizing** — The Risk Manager evaluates trades with strict confidence scores (50-100%). Position sizes are dynamically scaled based on this AI confidence level.
 - **Parallel Scanner Engine** — 30-second multi-model screening cycle on the NIFTY 50 watchlist, wired directly to INDstocks batch quotes and 3 LLM screeners (Gemini, Grok, Perplexity) running concurrently.
 - **Safety-First Execution** — Immutable position limits, persistent drawdown tracking, daily loss circuit breakers, and small-account exemptions.
@@ -87,7 +88,7 @@ graph TD
     end
 
     subgraph Infra["Infrastructure"]
-        INDstocks["INDstocks Broker<br/>NSE / BSE Trading"]:::external
+        Broker["INDstocks / Kite Connect<br/>NSE / BSE Trading"]:::external
         Supabase["Supabase DB<br/>State, History, Auth"]:::external
         Redis["Redis LangCache<br/>Semantic LLM Caching"]:::external
     end
@@ -101,14 +102,14 @@ graph TD
     RiskAgent -- "Confidence %" --> TraderAgent
     TraderAgent --> Safety
     Safety --> Router
-    Router --> INDstocks
+    Router --> Broker
     Orchestrator -.-> Supabase
     Orchestrator -.-> Redis
     Router -. "Trade Result" .-> Orchestrator
     Orchestrator -. "Reflection" .-> DataAgents
 ```
 
-*High-level overview of the SkopaqTrader architecture, connecting the user interfaces to the multi-agent AI team and the INDstocks execution engine.*
+*High-level overview of the SkopaqTrader architecture, connecting the user interfaces to the multi-agent AI team and the broker execution engine.*
 
 ### 🤖 AI Agent Workflow
 
@@ -124,7 +125,7 @@ sequenceDiagram
     participant Research as Researchers
     participant Risk as Risk Manager
     participant Trader as Trader Agent
-    participant Broker as INDstocks Broker
+    participant Broker as Broker (INDstocks / Kite)
 
     User->>Orch: Request Analysis (e.g. RELIANCE)
     Orch->>Analysts: Gather Market, News, Social Data
@@ -160,7 +161,7 @@ flowchart LR
     S2["2. AI Team Analyzes<br/>News, Trends, Fundamentals"]:::step
     S3["3. AI Debate and Decision<br/>Bull vs Bear Arguments"]:::step
     S4["4. Risk and Confidence Check<br/>Score validates position size"]:::step
-    S5["5. Execute Trade<br/>Paper or Live via INDstocks"]:::highlight
+    S5["5. Execute Trade<br/>Paper or Live via Broker"]:::highlight
     S6["6. Reflect and Learn<br/>Lessons feed future trades"]:::step
 
     S1 --> S2 --> S3 --> S4 --> S5 -.-> S6
@@ -186,7 +187,7 @@ flowchart TD
     classDef memory fill:#475569,stroke:#334155,color:#fff
 
     Start(("skopaq scan<br/>NIFTY 50")):::trigger
-    INDapi["INDstocks API Batch Quote"]:::data
+    INDapi["Broker API Batch Quote<br/>(INDstocks / Kite / yfinance)"]:::data
     CacheCheck{"Redis LangCache<br/>Semantic Check"}:::check
     CachedData["Return Cached Inference"]:::llm
 
@@ -247,6 +248,7 @@ SkopaqTrader includes comprehensive blockchain infrastructure for crypto trading
 
 | Feature | Module | Description |
 |---------|--------|-------------|
+| **Kite Connect** | `skopaq/broker/kite_client.py` | Zerodha Kite Connect REST API v3 for NSE/BSE trading |
 | **Live Trading** | `skopaq/broker/binance_auth.py` | Authenticated Binance API for spot trading with API keys |
 | **Real-Time Feeds** | `skopaq/broker/binance_ws.py` | WebSocket streams for ticker, trades, order book, klines |
 | **Gas Oracle** | `skopaq/blockchain/gas.py` | ETH, Polygon, Arbitrum, Optimism gas prices + tx cost estimates |
@@ -333,10 +335,16 @@ skopaq status
 skopaq analyze RELIANCE
 skopaq analyze TATAMOTORS --date 2026-02-28
 
-# Analyze + execute (paper mode by default)
+# Trade a specific stock (full lifecycle: analyze + trade + monitor + close)
 skopaq trade RELIANCE
 
-# Run scanner cycle
+# Auto-discover and trade (scan NIFTY 50 → pick best → trade → monitor)
+skopaq trade                           # Best single pick
+skopaq trade --top 3                   # Trade top 3 candidates
+skopaq trade --watchlist "RELIANCE,TCS,INFY"  # Scan only these symbols
+skopaq trade --no-monitor              # Skip position monitoring
+
+# Run scanner cycle (no execution)
 skopaq scan --max-candidates 5
 
 # Autonomous daemon (full session: scan → trade → monitor → close)
@@ -354,7 +362,23 @@ skopaq serve --port 8000
 # Token management (INDstocks broker)
 skopaq token set <your-token>
 skopaq token status
+
+# Kite Connect (Zerodha) broker
+skopaq kite login-url                  # Get OAuth login URL
+skopaq kite session <request-token>    # Exchange for access token
+skopaq kite status                     # Check Kite token health
 ```
+
+### Broker Selection
+
+Set `SKOPAQ_BROKER` in `.env` to choose your broker:
+
+```bash
+SKOPAQ_BROKER=indstocks   # INDstocks (default)
+SKOPAQ_BROKER=kite        # Kite Connect (Zerodha)
+```
+
+Paper trading works **without any broker credentials** — the `MarketDataProvider` automatically falls back to yfinance for market data.
 
 ### Python API
 
@@ -406,7 +430,7 @@ skopaqtrader/
 │   ├── agents/                 # Sell analyst (AI exit decisions)
 │   ├── api/                    # FastAPI backend server
 │   ├── blockchain/             # Gas oracle, whale alerts
-│   ├── broker/                 # INDstocks REST/WebSocket + Binance + paper engine
+│   ├── broker/                 # INDstocks + Kite Connect + Binance + paper engine + market data provider
 │   ├── cli/                    # Typer CLI (analyze, trade, scan, daemon, monitor)
 │   ├── db/                     # Supabase client + repositories
 │   ├── execution/              # Executor, safety checker, order router, daemon, monitor
@@ -437,7 +461,7 @@ skopaqtrader/
 ## Security
 
 - **No secrets in the repository.** All API keys, tokens, and credentials are loaded from environment variables via `.env` (gitignored). See [`.env.example`](.env.example) for the full list of configurable keys.
-- **INDstocks tokens** are stored locally in `~/.skopaq/token.json` (gitignored) and validated on every daemon session start.
+- **Broker tokens** are encrypted at rest in `~/.skopaq/` (INDstocks: `token.enc`, Kite: `kite_token.enc`) using Fernet symmetric encryption and validated on every daemon session start.
 - **Immutable safety rules** in `skopaq/constants.py` enforce position limits, order value caps, and rate limits that cannot be overridden at runtime.
 - **Daemon safety variants** apply tighter limits for unattended operation (fewer positions, lower order caps, slower pace).
 - **Live trading double-gate** — the `trade` and `daemon` CLI commands require an explicit confirmation prompt before executing real orders.
@@ -533,6 +557,7 @@ All product names, logos, and brands mentioned in this project are property of t
 - **NSE** is a trademark of National Stock Exchange of India Limited.
 - **BSE** is a trademark of BSE Limited.
 - **INDstocks** is a trademark of its respective owner.
+- **Zerodha** and **Kite Connect** are trademarks of Zerodha Broking Ltd.
 - **Supabase**, **Vercel**, **Railway**, **Upstash**, **Cloudflare**, and **OpenRouter** are trademarks of their respective companies.
 
 All trademarks are used here solely for identification and interoperability purposes.

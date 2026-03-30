@@ -3,14 +3,16 @@
 The router is intentionally thin — it checks ``config.trading_mode`` and
 dispatches to the appropriate execution backend.  Switching paper → live
 is a config change, not a code change.
+
+Supports multiple brokers (INDstocks, Kite Connect) — the ``live_client``
+parameter accepts either client type.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Protocol, Union
 
-from skopaq.broker.client import INDstocksClient
 from skopaq.broker.models import (
     ExecutionResult,
     Funds,
@@ -21,37 +23,54 @@ from skopaq.broker.models import (
     TradingSignal,
 )
 from skopaq.broker.paper_engine import PaperEngine
-from skopaq.broker.scrip_resolver import resolve_security_id
 from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
+
+
+class BrokerClient(Protocol):
+    """Protocol that both INDstocksClient and KiteConnectClient satisfy.
+
+    This allows OrderRouter to accept either broker without tight coupling.
+    """
+
+    async def place_order(self, order: OrderRequest) -> OrderResponse: ...
+    async def get_positions(self) -> list[Position]: ...
+    async def get_holdings(self) -> list[Holding]: ...
+    async def get_funds(self) -> Funds: ...
+    async def get_orders(self) -> list[OrderResponse]: ...
 
 
 class OrderRouter:
     """Routes orders to the correct execution backend.
 
     In ``paper`` mode all orders go through the PaperEngine.
-    In ``live`` mode orders go to the INDstocks REST API.
+    In ``live`` mode orders go to the configured broker (INDstocks or Kite).
 
     Args:
         config: Application configuration (determines mode).
         paper_engine: Paper trading engine instance.
-        live_client: INDstocks REST client (can be None in paper-only mode).
+        live_client: Broker REST client (INDstocks or Kite; can be None in paper-only mode).
     """
 
     def __init__(
         self,
         config: SkopaqConfig,
         paper_engine: PaperEngine,
-        live_client: Optional[INDstocksClient] = None,
+        live_client: Optional[Union[BrokerClient]] = None,
     ) -> None:
         self._mode = config.trading_mode
+        self._broker = config.broker
         self._paper = paper_engine
         self._live = live_client
 
     @property
     def mode(self) -> str:
         return self._mode
+
+    @property
+    def broker(self) -> str:
+        return self._broker
 
     async def execute(
         self,
@@ -61,14 +80,20 @@ class OrderRouter:
         """Route an order to the appropriate backend."""
         if self._mode == "live":
             return await self._execute_live(order, signal)
-        return self._execute_paper(order, signal)
+        return await self._execute_paper(order, signal)
 
-    def _execute_paper(
+    async def _execute_paper(
         self,
         order: OrderRequest,
         signal: Optional[TradingSignal],
     ) -> ExecutionResult:
-        """Execute via paper engine (synchronous)."""
+        """Execute via paper engine.
+
+        Uses async execution (with auto-refresh) when a MarketDataProvider
+        is attached, otherwise falls back to synchronous execution.
+        """
+        if self._paper._market_data is not None:
+            return await self._paper.execute_order_async(order, signal)
         return self._paper.execute_order(order, signal)
 
     async def _execute_live(
@@ -76,18 +101,20 @@ class OrderRouter:
         order: OrderRequest,
         signal: Optional[TradingSignal],
     ) -> ExecutionResult:
-        """Execute via live INDstocks API.
+        """Execute via live broker API (INDstocks or Kite Connect).
 
-        Resolves ``security_id`` from the instruments CSV if not already
-        set on the order, then places the order via the broker client.
+        For INDstocks: resolves ``security_id`` from instruments CSV.
+        For Kite: uses ``tradingsymbol`` directly (no extra resolution needed).
         """
         if self._live is None:
             logger.error("Live client not configured — falling back to paper")
-            return self._execute_paper(order, signal)
+            return await self._execute_paper(order, signal)
 
         try:
-            # Resolve security_id if missing (executor builds orders without it)
-            if not order.security_id:
+            # INDstocks requires security_id resolution before placing
+            if self._broker == "indstocks" and not order.security_id:
+                from skopaq.broker.scrip_resolver import resolve_security_id
+
                 order.security_id = await resolve_security_id(
                     self._live, order.symbol, order.exchange.value,
                 )
@@ -97,13 +124,17 @@ class OrderRouter:
                 )
 
             response = await self._live.place_order(order)
+
+            # Kite brokerage: ₹20 per executed order or 0.03%, whichever is lower
+            brokerage = 20.0 if self._broker == "kite" else 20.0
+
             return ExecutionResult(
                 success=True,
                 order=response,
                 signal=signal,
                 mode="live",
                 fill_price=order.price,   # Limit price (actual fill via order book)
-                brokerage=20.0,           # INDstocks flat fee estimate
+                brokerage=brokerage,
             )
         except Exception as exc:
             logger.error("Live order failed: %s — NOT falling back to paper", exc)

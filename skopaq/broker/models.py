@@ -47,15 +47,16 @@ class OrderType(StrEnum):
 
 
 class Product(StrEnum):
-    """INDstocks product types.
+    """Product types used across brokers.
 
-    API docs use INTRADAY/MARGIN/CNC.  We also keep MIS/NRML as aliases
-    so internal code can use either naming convention.
+    INDstocks API uses INTRADAY/MARGIN/CNC.
+    Kite Connect uses MIS/NRML/CNC.
+    We keep both naming conventions as aliases.
     """
     CNC = "CNC"            # Cash and Carry (delivery)
-    INTRADAY = "INTRADAY"  # Intraday
-    MARGIN = "MARGIN"      # Margin
-    # Aliases for internal code that uses Zerodha-style names
+    INTRADAY = "INTRADAY"  # Intraday (INDstocks)
+    MARGIN = "MARGIN"      # Margin (INDstocks)
+    # Aliases for Zerodha/Kite-style names
     MIS = "INTRADAY"
     NRML = "MARGIN"
 

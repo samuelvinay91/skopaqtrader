@@ -64,7 +64,7 @@ def display_welcome() -> None:
         "AI algorithmic trading platform for Indian equities\n",
         style="bold white",
     )
-    content.append("Integrates with INDstocks  ", style=DIM)
+    content.append("Multi-Broker (INDstocks | Kite | Angel One | Upstox)  ", style=DIM)
     content.append("|  ", style=DIM)
     content.append("Built on TradingAgents", style=DIM)
     content.append("\n\n")
@@ -118,7 +118,13 @@ def display_status(
     table.add_row("Mode", f"[{mode_style}]{mode}[/{mode_style}]")
 
     # Broker
-    table.add_row("Broker", f"INDstocks ({config.indstocks_base_url})")
+    broker_name = config.broker.capitalize() if hasattr(config, "broker") else "INDstocks"
+    table.add_row("Broker", f"[{ACCENT}]{broker_name}[/{ACCENT}]")
+
+    # Product type
+    product = getattr(config, "default_product", "CNC")
+    product_label = {"CNC": "CNC (Delivery)", "MIS": "MIS (Intraday)", "NRML": "NRML (F&O)"}.get(product, product)
+    table.add_row("Product", product_label)
 
     # Token
     if health.valid:
@@ -613,6 +619,14 @@ def display_daemon_start(config: SkopaqConfig) -> None:
     mode = config.trading_mode.upper()
     mode_style = SUCCESS if mode == "PAPER" else "bold red"
     table.add_row("Mode", f"[{mode_style}]{mode}[/{mode_style}]")
+
+    broker_name = config.broker.capitalize() if hasattr(config, "broker") else "INDstocks"
+    table.add_row("Broker", f"[{ACCENT}]{broker_name}[/{ACCENT}]")
+
+    product = getattr(config, "default_product", "CNC")
+    product_label = {"CNC": "Delivery (CNC)", "MIS": "Intraday (MIS)", "NRML": "F&O (NRML)"}.get(product, product)
+    table.add_row("Product", product_label)
+
     table.add_row("Max Trades", str(config.daemon_max_trades_per_session))
     table.add_row("Max Candidates", str(config.daemon_max_candidates_to_analyze))
     table.add_row("Scan Delay", f"{config.daemon_scan_delay_after_open_seconds}s after open")

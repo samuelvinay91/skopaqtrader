@@ -13,38 +13,51 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from skopaq import __version__
-from skopaq.broker.token_manager import TokenManager
 from skopaq.config import SkopaqConfig
 
 logger = logging.getLogger(__name__)
 
+
 app = FastAPI(
     title="SkopaqTrader API",
+    description="AI algorithmic trading platform for Indian equities.",
     version=__version__,
-    docs_url="/docs",
 )
 
-# CORS — allow frontend (Vercel) to call the API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+def _get_token_health(config: SkopaqConfig):
+    """Get token health for the configured broker."""
+    if config.broker == "kite":
+        from skopaq.broker.kite_token_manager import KiteTokenManager
+        return KiteTokenManager().get_health()
+    else:
+        from skopaq.broker.token_manager import TokenManager
+        return TokenManager().get_health()
+
+
+# ── Health Check ─────────────────────────────────────────────────────────────
+
+
 @app.get("/health")
 async def health() -> dict:
-    """Health check endpoint (used by Railway)."""
+    """Lightweight health check for Railway / load balancers."""
     config = SkopaqConfig()
-    token_mgr = TokenManager()
-    health = token_mgr.get_health()
+    health = _get_token_health(config)
 
     return {
         "status": "ok",
         "version": __version__,
         "mode": config.trading_mode,
+        "broker": config.broker,
+        "product": config.default_product,
         "token_valid": health.valid,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -54,19 +67,27 @@ async def health() -> dict:
 async def system_status() -> dict:
     """Detailed system status for the dashboard."""
     config = SkopaqConfig()
-    token_mgr = TokenManager()
-    token_health = token_mgr.get_health()
+    token_health = _get_token_health(config)
 
     return {
         "version": __version__,
         "mode": config.trading_mode,
+        "product": config.default_product,
         "broker": {
-            "name": "INDstocks",
-            "base_url": config.indstocks_base_url,
+            "name": config.broker,
             "token_valid": token_health.valid,
-            "token_expires_at": token_health.expires_at.isoformat() if token_health.expires_at else None,
-            "token_remaining": str(token_health.remaining) if token_health.remaining else None,
+            "token_expires_at": (
+                token_health.expires_at.isoformat() if token_health.expires_at else None
+            ),
+            "token_remaining": (
+                str(token_health.remaining) if token_health.remaining else None
+            ),
             "token_warning": token_health.warning or None,
+        },
+        "market_data": {
+            "angelone": bool(config.angelone_api_key.get_secret_value()),
+            "upstox": bool(config.upstox_access_token.get_secret_value()),
+            "yfinance": True,  # Always available
         },
         "services": {
             "supabase": bool(config.supabase_url),
@@ -87,69 +108,36 @@ async def system_status() -> dict:
 _scanner_engine = None
 
 
-def _get_scanner():
-    """Lazy-init scanner engine singleton."""
-    global _scanner_engine
-    if _scanner_engine is None:
-        from skopaq.scanner import ScannerEngine, Watchlist
-        config = SkopaqConfig()
-        _scanner_engine = ScannerEngine(
-            watchlist=Watchlist(),
-            cycle_seconds=config.scanner_cycle_seconds,
-            max_candidates=config.scanner_max_candidates,
-        )
-    return _scanner_engine
+@app.post("/api/scan")
+async def run_scan(max_candidates: int = 5) -> dict:
+    """Run a single scanner cycle and return candidates."""
+    try:
+        from skopaq.cli.main import _run_scan
+
+        candidates = await _run_scan(max_candidates)
+        return {
+            "candidates": [c.to_dict() for c in candidates] if candidates else [],
+        }
+    except Exception as exc:
+        logger.error("Scanner failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.on_event("startup")
-async def _start_scanner():
-    """Start scanner as a background task if enabled in config."""
-    config = SkopaqConfig()
-    if config.scanner_enabled:
-        scanner = _get_scanner()
-        await scanner.start()
-        logger.info("Scanner background task started")
-
-
-@app.on_event("shutdown")
-async def _stop_scanner():
-    """Stop scanner on shutdown."""
-    if _scanner_engine and _scanner_engine.running:
-        await _scanner_engine.stop()
-
-
-@app.get("/api/scanner/status")
-async def scanner_status() -> dict:
-    """Scanner engine status."""
-    scanner = _get_scanner()
-    return scanner.status
-
-
-@app.get("/api/scanner/candidates")
-async def scanner_candidates() -> dict:
-    """Recent scanner candidates."""
-    scanner = _get_scanner()
-    candidates = []
-    # Drain the queue (non-blocking)
-    while not scanner.candidate_queue.empty():
-        try:
-            c = scanner.candidate_queue.get_nowait()
-            candidates.append(c.to_dict())
-        except Exception:
-            break
-    return {
-        "candidates": candidates,
-        "last_candidates": [c.to_dict() for c in scanner._last_candidates],
-    }
+# ── Portfolio ─────────────────────────────────────────────────────────────────
 
 
 @app.get("/api/portfolio")
 async def portfolio() -> dict:
     """Current portfolio snapshot (paper mode)."""
+    from skopaq.broker.market_data import MarketDataProvider
     from skopaq.broker.paper_engine import PaperEngine
 
     config = SkopaqConfig()
-    paper = PaperEngine(initial_capital=config.initial_paper_capital)
+    market_data = MarketDataProvider(config)
+    paper = PaperEngine(
+        initial_capital=config.initial_paper_capital,
+        market_data=market_data,
+    )
     snapshot = paper.get_snapshot()
 
     return {
@@ -160,5 +148,6 @@ async def portfolio() -> dict:
         "positions": [p.model_dump() for p in snapshot.positions],
         "open_orders": snapshot.open_orders,
         "mode": config.trading_mode,
+        "product": config.default_product,
         "timestamp": snapshot.timestamp.isoformat(),
     }

@@ -31,15 +31,35 @@ class SkopaqConfig(BaseSettings):
     upstash_redis_url: str = ""
     upstash_redis_token: SecretStr = SecretStr("")
 
+    # ── Broker Selection ───────────────────────────────────────────────
+    broker: Literal["indstocks", "kite"] = "indstocks"
+
     # ── INDstocks Broker ────────────────────────────────────────────────
     indstocks_token: SecretStr = SecretStr("")
     indstocks_base_url: str = "https://api.indstocks.com"
     indstocks_ws_price_url: str = "wss://ws-prices.indstocks.com/api/v1/ws/prices"
     indstocks_ws_order_url: str = "wss://ws-order-updates.indstocks.com"
 
+    # ── Kite Connect (Zerodha) Broker ──────────────────────────────────
+    kite_api_key: SecretStr = SecretStr("")
+    kite_api_secret: SecretStr = SecretStr("")
+    kite_access_token: SecretStr = SecretStr("")  # Set directly or via login flow
+
+    # ── Angel One SmartAPI (free market data) ────────────────────────────
+    angelone_api_key: SecretStr = SecretStr("")
+    angelone_client_id: str = ""
+    angelone_password: SecretStr = SecretStr("")
+    angelone_totp_secret: SecretStr = SecretStr("")
+
+    # ── Upstox API (free market data) ──────────────────────────────────
+    upstox_api_key: SecretStr = SecretStr("")
+    upstox_api_secret: SecretStr = SecretStr("")
+    upstox_access_token: SecretStr = SecretStr("")
+
     # ── Trading Mode ────────────────────────────────────────────────────
     trading_mode: Literal["paper", "live"] = "paper"
     initial_paper_capital: float = 1_000_000.0  # INR
+    default_product: Literal["CNC", "MIS", "NRML"] = "CNC"  # CNC=delivery, MIS=intraday
 
     # ── LLM API Keys ───────────────────────────────────────────────────
     google_api_key: SecretStr = SecretStr("")  # Gemini Flash (scanner)
