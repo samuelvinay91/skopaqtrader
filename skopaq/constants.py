@@ -84,6 +84,28 @@ CRYPTO_PAPER_SAFETY_RULES = SafetyRules(
 )
 
 
+# Intraday (MIS) variant — strict market hours + mandatory EOD exit.
+# MIS positions get squared off by the broker at 3:15 PM if not closed.
+# We use tighter limits since intraday margin provides leverage.
+INTRADAY_SAFETY_RULES = SafetyRules(
+    market_hours_only=True,           # Must trade during NSE hours
+    require_stop_loss=True,           # Mandatory for intraday
+    min_stop_loss_pct=0.01,           # 1% min (tighter than delivery 2%)
+    max_position_pct=0.20,            # 20% — MIS gets ~5x margin
+    max_order_value_inr=500_000.0,    # Same cap, but margin makes it go further
+    max_daily_loss_pct=0.02,          # 2% daily loss limit (tighter)
+    cool_down_after_loss_minutes=10,  # Shorter cooldown for intraday
+)
+
+# Intraday paper variant — relaxed timing for testing outside market hours.
+INTRADAY_PAPER_SAFETY_RULES = SafetyRules(
+    market_hours_only=False,          # Test anytime
+    require_stop_loss=False,          # Relaxed for paper
+    max_position_pct=0.20,            # Same leverage limits
+    max_daily_loss_pct=0.02,          # Same loss limit
+)
+
+
 # Daemon variant — tighter limits for fully autonomous unattended trading.
 DAEMON_SAFETY_RULES = SafetyRules(
     max_open_positions=3,             # 3 vs 5: tighter for unattended

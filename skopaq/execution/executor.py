@@ -46,10 +46,15 @@ class Executor:
         router: OrderRouter,
         safety: SafetyChecker,
         position_sizer: Optional[PositionSizer] = None,
+        product: str = "CNC",
     ) -> None:
         self._router = router
         self._safety = safety
         self._sizer = position_sizer
+        # Map common aliases: MIS → INTRADAY, NRML → MARGIN
+        _product_map = {"MIS": "INTRADAY", "NRML": "MARGIN"}
+        canonical = _product_map.get(product, product) if product else "CNC"
+        self._product = Product(canonical)
 
     async def execute_signal(
         self,
@@ -243,7 +248,7 @@ class Executor:
             order_type=order_type,
             price=signal.entry_price,
             trigger_price=signal.stop_loss if side == Side.BUY else None,
-            product=Product.CNC,
+            product=self._product,
             tag=f"skopaq-{signal.confidence}",
         )
 

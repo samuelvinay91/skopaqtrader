@@ -33,7 +33,7 @@ from skopaq.execution.safety_checker import SafetyChecker
 
 
 def _make_executor(
-    mode="paper", rules=None, sizer=None,
+    mode="paper", rules=None, sizer=None, product="CNC",
 ) -> tuple[Executor, PaperEngine, OrderRouter]:
     """Build a minimal Executor stack for testing."""
     from skopaq.constants import PAPER_SAFETY_RULES
@@ -49,7 +49,7 @@ def _make_executor(
         rules=rules or PAPER_SAFETY_RULES,
         max_sector_concentration_pct=0.40,
     )
-    executor = Executor(router, safety, position_sizer=sizer)
+    executor = Executor(router, safety, position_sizer=sizer, product=product)
     return executor, paper, router
 
 
@@ -285,3 +285,62 @@ class TestExecuteSignal:
             result = await executor.execute_signal(signal)
 
         assert signal.entry_price == 2500.0  # Should have been resolved
+
+
+# ── Intraday (MIS) product tests ─────────────────────────────────────────
+
+
+class TestIntradayProduct:
+    def test_intraday_executor_uses_mis(self):
+        """Executor with product=MIS should build intraday orders."""
+        executor, _, _ = _make_executor(product="MIS")
+        signal = _buy_signal()
+        order = executor._build_order(signal)
+        # MIS maps to Product.INTRADAY (value "INTRADAY")
+        assert order.product.value == "INTRADAY"
+
+    def test_delivery_executor_uses_cnc(self):
+        """Executor with default product=CNC should build CNC orders."""
+        executor, _, _ = _make_executor(product="CNC")
+        signal = _buy_signal()
+        order = executor._build_order(signal)
+        assert order.product == Product.CNC
+
+    def test_nrml_product(self):
+        """Executor with product=NRML for F&O."""
+        executor, _, _ = _make_executor(product="NRML")
+        signal = _buy_signal()
+        order = executor._build_order(signal)
+        # NRML maps to Product.MARGIN (value "MARGIN")
+        assert order.product.value == "MARGIN"
+
+    def test_product_persists_across_orders(self):
+        """Product should be the same for all orders from the same executor."""
+        executor, _, _ = _make_executor(product="MIS")
+        buy_order = executor._build_order(_buy_signal())
+        sell_order = executor._build_order(_sell_signal())
+        assert buy_order.product.value == "INTRADAY"
+        assert sell_order.product.value == "INTRADAY"
+
+
+class TestIntradaySafetyRules:
+    def test_intraday_rules_require_market_hours(self):
+        from skopaq.constants import INTRADAY_SAFETY_RULES
+        assert INTRADAY_SAFETY_RULES.market_hours_only is True
+
+    def test_intraday_rules_require_stop_loss(self):
+        from skopaq.constants import INTRADAY_SAFETY_RULES
+        assert INTRADAY_SAFETY_RULES.require_stop_loss is True
+
+    def test_intraday_rules_tighter_min_stop(self):
+        from skopaq.constants import INTRADAY_SAFETY_RULES, SAFETY_RULES
+        assert INTRADAY_SAFETY_RULES.min_stop_loss_pct < SAFETY_RULES.min_stop_loss_pct
+
+    def test_intraday_paper_relaxes_timing(self):
+        from skopaq.constants import INTRADAY_PAPER_SAFETY_RULES
+        assert INTRADAY_PAPER_SAFETY_RULES.market_hours_only is False
+        assert INTRADAY_PAPER_SAFETY_RULES.require_stop_loss is False
+
+    def test_intraday_tighter_daily_loss(self):
+        from skopaq.constants import INTRADAY_SAFETY_RULES, SAFETY_RULES
+        assert INTRADAY_SAFETY_RULES.max_daily_loss_pct < SAFETY_RULES.max_daily_loss_pct

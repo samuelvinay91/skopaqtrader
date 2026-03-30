@@ -298,12 +298,14 @@ def trade(
     top: int = typer.Option(1, "--top", help="Number of candidates to trade (when auto-scanning)."),
     watchlist: str = typer.Option("", "--watchlist", help="Comma-separated symbols to scan (instead of NIFTY 50)."),
     no_monitor: bool = typer.Option(False, "--no-monitor", help="Skip position monitoring after trade."),
+    intraday: bool = typer.Option(False, "--intraday", help="Use MIS (intraday) product instead of CNC (delivery)."),
 ) -> None:
     """Analyze and execute trades.
 
     With a symbol:   skopaq trade RELIANCE      (analyze + trade that symbol)
     Without symbol:  skopaq trade               (auto-scan → trade best pick)
     Multiple:        skopaq trade --top 3        (scan → trade top 3 candidates)
+    Intraday:        skopaq trade --intraday     (MIS product, forced EOD exit)
     Custom list:     skopaq trade --watchlist "RELIANCE,TCS,INFY"
 
     In paper mode, the full lifecycle runs automatically:
@@ -314,6 +316,10 @@ def trade(
 
     from skopaq.config import SkopaqConfig
     config = SkopaqConfig()
+
+    # --intraday flag overrides product to MIS
+    if intraday:
+        config.default_product = "MIS"
 
     # Double-confirmation gate for LIVE mode — real money at stake
     if config.trading_mode == "live":
@@ -440,7 +446,11 @@ async def _run_trade(symbol: str, trade_date: str):
             atr_period=config.atr_period,
         )
 
-    executor = Executor(router, safety, position_sizer=sizer)
+    executor = Executor(
+        router, safety,
+        position_sizer=sizer,
+        product=config.default_product,
+    )
 
     # Compute regime and calendar scales for position sizing
     # (India VIX + NSE calendar are irrelevant for crypto — skip)
@@ -516,6 +526,7 @@ async def _run_trade_full(
     from skopaq.config import SkopaqConfig
     from skopaq.constants import (
         CRYPTO_PAPER_SAFETY_RULES, CRYPTO_SAFETY_RULES,
+        INTRADAY_PAPER_SAFETY_RULES, INTRADAY_SAFETY_RULES,
         PAPER_SAFETY_RULES, SAFETY_RULES,
     )
     from skopaq.execution.daemon import DaemonSessionReport
@@ -528,6 +539,7 @@ async def _run_trade_full(
     config = SkopaqConfig()
     is_crypto = config.asset_class == "crypto"
     is_paper = config.trading_mode == "paper"
+    is_intraday = config.default_product == "MIS"
 
     report = DaemonSessionReport(
         session_date=trade_date,
@@ -551,6 +563,8 @@ async def _run_trade_full(
 
     if is_crypto:
         rules = CRYPTO_PAPER_SAFETY_RULES if is_paper else CRYPTO_SAFETY_RULES
+    elif is_intraday:
+        rules = INTRADAY_PAPER_SAFETY_RULES if is_paper else INTRADAY_SAFETY_RULES
     else:
         rules = PAPER_SAFETY_RULES if is_paper else SAFETY_RULES
 
@@ -578,7 +592,11 @@ async def _run_trade_full(
             atr_multiplier=config.atr_multiplier,
             atr_period=config.atr_period,
         )
-    executor = Executor(router, safety, position_sizer=sizer)
+    executor = Executor(
+        router, safety,
+        position_sizer=sizer,
+        product=config.default_product,
+    )
 
     # Open broker context
     if broker_client is not None:
@@ -1024,12 +1042,21 @@ async def _run_monitor(config, ai_enabled: bool):
             logger.info("No broker token — using yfinance for market data")
 
     router = OrderRouter(config, paper, live_client=live_client)
-    rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+
+    from skopaq.constants import (
+        INTRADAY_PAPER_SAFETY_RULES, INTRADAY_SAFETY_RULES,
+    )
+    is_intraday = config.default_product == "MIS"
+    if is_intraday:
+        rules = INTRADAY_PAPER_SAFETY_RULES if config.trading_mode == "paper" else INTRADAY_SAFETY_RULES
+    else:
+        rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
+
     safety = SafetyChecker(
         rules=rules,
         max_sector_concentration_pct=config.max_sector_concentration_pct,
     )
-    executor = Executor(router, safety)
+    executor = Executor(router, safety, product=config.default_product)
 
     # Build LLM for sell analyst (if AI enabled)
     llm = None

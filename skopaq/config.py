@@ -59,6 +59,7 @@ class SkopaqConfig(BaseSettings):
     # ── Trading Mode ────────────────────────────────────────────────────
     trading_mode: Literal["paper", "live"] = "paper"
     initial_paper_capital: float = 1_000_000.0  # INR
+    default_product: Literal["CNC", "MIS", "NRML"] = "CNC"  # CNC=delivery, MIS=intraday
 
     # ── LLM API Keys ───────────────────────────────────────────────────
     google_api_key: SecretStr = SecretStr("")  # Gemini Flash (scanner)

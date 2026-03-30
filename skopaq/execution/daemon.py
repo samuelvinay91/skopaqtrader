@@ -332,7 +332,11 @@ class TradingDaemon:
                 atr_period=config.atr_period,
             )
 
-        self._executor = Executor(self._router, safety, position_sizer=sizer)
+        self._executor = Executor(
+            self._router, safety,
+            position_sizer=sizer,
+            product=config.default_product,
+        )
 
         # 5. Build analysis graph
         upstream_config = _build_upstream_config(config)
