@@ -133,6 +133,71 @@ def build_social_prompt(
     )
 
 
+def build_tavily_news_query(symbols: list[str]) -> str:
+    """Convert a symbol list into a Tavily search query for Indian equity news.
+
+    Produces a concise query that Tavily's news topic can handle well.
+    """
+    # Limit query length — Tavily recommends <400 chars
+    symbol_str = " OR ".join(symbols[:20])
+    return f"NSE India stock market news {symbol_str}"
+
+
+def parse_tavily_results(
+    results: list[dict[str, Any]],
+    max_candidates: int = 3,
+) -> list[ScannerCandidate]:
+    """Convert Tavily search results into ScannerCandidate objects.
+
+    Each Tavily result has: title, url, content, score, published_date.
+    We extract stock symbols mentioned in the title/content and build
+    candidates from the most relevant results.
+    """
+    import re
+
+    candidates: list[ScannerCandidate] = []
+    seen_symbols: set[str] = set()
+
+    for result in results:
+        if len(candidates) >= max_candidates:
+            break
+
+        title = result.get("title", "")
+        content = result.get("content", "")
+        score = result.get("score", 0)
+        text = f"{title} {content}"
+
+        # Try to extract NSE symbols (uppercase words that look like tickers)
+        # Common Indian stock symbols: 2-20 uppercase letters, sometimes with &
+        ticker_pattern = r'\b([A-Z][A-Z&]{1,19})\b'
+        matches = re.findall(ticker_pattern, text)
+
+        # Filter out common English words that look like tickers
+        noise = {
+            "THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "WILL",
+            "HAS", "HAD", "ARE", "WAS", "NOT", "BUT", "ALL", "NEW", "ITS",
+            "CAN", "MAY", "NOW", "HOW", "WHO", "NSE", "BSE", "IPO", "CEO",
+            "CFO", "INR", "USD", "RBI", "SEBI", "ETF", "FII", "DII",
+        }
+        symbols_found = [s for s in matches if s not in noise and len(s) >= 3]
+
+        for sym in symbols_found:
+            if sym in seen_symbols:
+                continue
+            if len(candidates) >= max_candidates:
+                break
+            seen_symbols.add(sym)
+            reason = title[:100] if title else content[:100]
+            candidates.append(ScannerCandidate(
+                symbol=sym,
+                reason=reason,
+                urgency="high" if score > 0.7 else "normal",
+                metrics={"tavily_score": score},
+            ))
+
+    return candidates
+
+
 def _try_parse_json(text: str) -> Any:
     """Try to parse JSON, recovering from common LLM truncation issues.
 
