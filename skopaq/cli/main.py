@@ -367,140 +367,6 @@ def trade(
         display_trade_result(result)
 
 
-async def _run_trade(symbol: str, trade_date: str):
-    """Helper to run async trade.
-
-    For paper mode, this function:
-        1. Uses relaxed safety rules (no market-hours or stop-loss gate).
-        2. Fetches a real-time quote from INDstocks and injects it into the
-           paper engine so ``execute_order()`` can simulate a fill.
-        3. Wires the trade lifecycle manager for auto-reflection on SELL.
-    """
-    from skopaq.broker.market_data import MarketDataProvider
-    from skopaq.broker.paper_engine import PaperEngine
-    from skopaq.config import SkopaqConfig
-    from skopaq.constants import (
-        CRYPTO_PAPER_SAFETY_RULES, CRYPTO_SAFETY_RULES,
-        PAPER_SAFETY_RULES, SAFETY_RULES,
-    )
-    from skopaq.execution.executor import Executor
-    from skopaq.execution.order_router import OrderRouter
-    from skopaq.execution.safety_checker import SafetyChecker
-    from skopaq.graph.skopaq_graph import SkopaqTradingGraph
-
-    from skopaq.risk.position_sizer import PositionSizer
-
-    config = SkopaqConfig()
-    is_crypto = config.asset_class == "crypto"
-
-    # MarketDataProvider — auto-fallback: broker API → yfinance → cache
-    market_data = MarketDataProvider(config)
-
-    # Paper engine — crypto uses % brokerage + USDT capital
-    if is_crypto:
-        paper = PaperEngine(
-            initial_capital=config.initial_paper_capital,
-            brokerage_pct=0.001,         # 0.1% Binance spot fee
-            currency_label="USDT",
-            market_data=market_data,
-        )
-    else:
-        paper = PaperEngine(
-            initial_capital=config.initial_paper_capital,
-            market_data=market_data,
-        )
-
-    # Choose safety rules based on trading mode + asset class
-    if is_crypto:
-        rules = CRYPTO_PAPER_SAFETY_RULES if config.trading_mode == "paper" else CRYPTO_SAFETY_RULES
-    else:
-        rules = PAPER_SAFETY_RULES if config.trading_mode == "paper" else SAFETY_RULES
-
-    # Wire live broker client when in live mode; also attach to market data
-    live_client = None
-    if config.trading_mode == "live":
-        live_client = _create_live_client(config)
-    else:
-        # In paper mode, try to attach a broker client for best-quality data.
-        # If no token is available, MarketDataProvider falls back to yfinance.
-        try:
-            broker_client = _create_live_client(config)
-            await broker_client.__aenter__()
-            market_data.set_broker_client(broker_client)
-            logger.info("Paper mode: attached %s broker for live market data", config.broker)
-        except Exception:
-            logger.info("Paper mode: no broker token — using yfinance for market data")
-
-    router = OrderRouter(config, paper, live_client=live_client)
-    safety = SafetyChecker(
-        rules=rules,
-        max_sector_concentration_pct=config.max_sector_concentration_pct,
-    )
-
-    # ATR-based position sizer (optional — also works for crypto via yfinance)
-    sizer = None
-    if config.position_sizing_enabled:
-        sizer = PositionSizer(
-            risk_per_trade_pct=config.risk_per_trade_pct,
-            atr_multiplier=config.atr_multiplier,
-            atr_period=config.atr_period,
-        )
-
-    executor = Executor(
-        router, safety,
-        position_sizer=sizer,
-        product=config.default_product,
-    )
-
-    # Compute regime and calendar scales for position sizing
-    # (India VIX + NSE calendar are irrelevant for crypto — skip)
-    if is_crypto:
-        regime_scale, calendar_scale = 1.0, 1.0
-    else:
-        regime_scale, calendar_scale = _compute_risk_scales(config, trade_date)
-
-    upstream_config = _build_upstream_config(config)
-
-    # For crypto, translate BTCUSDT → BTC-USD for yfinance-based analysis
-    if is_crypto:
-        from skopaq.broker.crypto_symbols import to_yfinance_ticker
-        analysis_symbol = to_yfinance_ticker(symbol)
-        # Store the original Binance symbol for trade record building
-        upstream_config["_trade_symbol"] = symbol
-        logger.info("Crypto: %s → analysis as %s", symbol, analysis_symbol)
-    else:
-        analysis_symbol = symbol
-
-    # Load persisted memories + wire lifecycle manager
-    memory_store = _create_memory_store(config)
-    analysts = [a.strip() for a in config.selected_analysts.split(",") if a.strip()]
-    graph = SkopaqTradingGraph(
-        upstream_config, executor,
-        selected_analysts=analysts,
-        memory_store=memory_store,
-    )
-
-    # Open live client context if wired (INDstocksClient requires async with)
-    if live_client is not None:
-        await live_client.__aenter__()
-
-    try:
-        result = await graph.analyze_and_execute(
-            analysis_symbol, trade_date,
-            regime_scale=regime_scale,
-            calendar_scale=calendar_scale,
-        )
-    finally:
-        if live_client is not None:
-            await live_client.__aexit__(None, None, None)
-
-    # Post-execution: track lifecycle (BUY/SELL linkage + reflection)
-    if config.reflection_enabled and memory_store is not None:
-        await _run_lifecycle(config, graph, memory_store, result)
-
-    return result
-
-
 async def _run_trade_full(
     symbols: list[str] | None,
     trade_date: str,
@@ -874,65 +740,29 @@ async def _run_scan(max_candidates: int):
     else:
         watchlist = Watchlist()
 
-        if config.broker == "kite":
-            async def quote_fetcher(symbols: list[str]) -> list[dict]:
-                """Batch-fetch Kite Connect quotes for equity symbols."""
-                from skopaq.broker.kite_client import KiteConnectClient
-                from skopaq.broker.kite_token_manager import KiteTokenManager
+        # Use MarketDataProvider for broker-agnostic quote fetching.
+        # This supports all brokers (Kite, INDstocks) + free fallbacks
+        # (Angel One, Upstox, yfinance) automatically.
+        from skopaq.broker.market_data import MarketDataProvider
 
-                token_mgr = KiteTokenManager()
-                async with KiteConnectClient(config, token_mgr) as client:
-                    kite_keys = [f"NSE:{sym}" for sym in symbols]
-                    raw_quotes = await client.get_quotes(kite_keys, symbols=symbols)
+        _scanner_market_data = MarketDataProvider(config)
 
-                    return [
-                        {
-                            "symbol": q.symbol,
-                            "ltp": q.ltp,
-                            "open": q.open,
-                            "high": q.high,
-                            "low": q.low,
-                            "close": q.close,
-                            "volume": q.volume,
-                        }
-                        for q in raw_quotes
-                    ]
-        else:
-            async def quote_fetcher(symbols: list[str]) -> list[dict]:
-                """Batch-fetch INDstocks quotes for equity symbols."""
-                from skopaq.broker.client import INDstocksClient
-                from skopaq.broker.scrip_resolver import resolve_scrip_code
-                from skopaq.broker.token_manager import TokenManager
-
-                token_mgr = TokenManager()
-                async with INDstocksClient(config, token_mgr) as client:
-                    # Resolve all symbols → scrip codes (instruments CSV cached 1h)
-                    resolved: list[tuple[str, str]] = []
-                    for sym in symbols:
-                        try:
-                            code = await resolve_scrip_code(client, sym)
-                            resolved.append((sym, code))
-                        except ValueError:
-                            logger.debug("Scrip resolve failed: %s", sym)
-
-                    if not resolved:
-                        return []
-
-                    syms, codes = zip(*resolved)
-                    raw_quotes = await client.get_quotes(list(codes), symbols=list(syms))
-
-                    return [
-                        {
-                            "symbol": q.symbol,
-                            "ltp": q.ltp,
-                            "open": q.open,
-                            "high": q.high,
-                            "low": q.low,
-                            "close": q.close,
-                            "volume": q.volume,
-                        }
-                        for q in raw_quotes
-                    ]
+        async def quote_fetcher(symbols: list[str]) -> list[dict]:
+            """Batch-fetch quotes via MarketDataProvider (any broker/source)."""
+            quotes = await _scanner_market_data.get_quotes(symbols)
+            return [
+                {
+                    "symbol": q.symbol,
+                    "ltp": q.ltp,
+                    "open": q.open,
+                    "high": q.high,
+                    "low": q.low,
+                    "close": q.close,
+                    "volume": q.volume,
+                }
+                for q in quotes
+                if q.ltp > 0
+            ]
 
     # ── LLM screener factories ───────────────────────────────────────
 
