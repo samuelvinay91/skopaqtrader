@@ -254,7 +254,7 @@ class ScannerEngine:
     async def _screen_news_tavily(self, symbols: list[str]) -> list[ScannerCandidate]:
         """News screening via Tavily web search API (structured results)."""
         query = build_tavily_news_query(symbols)
-        response = self._tavily_client.search(
+        response = await self._tavily_client.search(
             query=query,
             max_results=10,
             search_depth="basic",
@@ -279,8 +279,8 @@ class ScannerEngine:
         if not api_key:
             return None
         try:
-            from tavily import TavilyClient
-            return TavilyClient(api_key=api_key)
+            from tavily import AsyncTavilyClient
+            return AsyncTavilyClient(api_key=api_key)
         except Exception as exc:
             logger.warning("Failed to initialise TavilyClient: %s", exc)
             return None

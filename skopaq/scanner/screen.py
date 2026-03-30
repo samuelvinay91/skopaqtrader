@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from skopaq.scanner.models import ScannerCandidate, ScannerMetrics
@@ -139,7 +140,7 @@ def build_tavily_news_query(symbols: list[str]) -> str:
     Produces a concise query that Tavily's news topic can handle well.
     """
     # Limit query length — Tavily recommends <400 chars
-    symbol_str = " OR ".join(symbols[:20])
+    symbol_str = " OR ".join(symbols[:10])
     return f"NSE India stock market news {symbol_str}"
 
 
@@ -153,8 +154,6 @@ def parse_tavily_results(
     We extract stock symbols mentioned in the title/content and build
     candidates from the most relevant results.
     """
-    import re
-
     candidates: list[ScannerCandidate] = []
     seen_symbols: set[str] = set()
 
@@ -213,7 +212,6 @@ def _try_parse_json(text: str) -> Any:
         pass
 
     # 2. Strip trailing commas (common LLM quirk)
-    import re
     cleaned = re.sub(r",\s*([}\]])", r"\1", text)
     try:
         return json.loads(cleaned)
