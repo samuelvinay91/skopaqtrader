@@ -21,6 +21,10 @@ def get_news_tavily(
 ) -> str:
     """Retrieve news for a specific stock ticker using the Tavily search API.
 
+    Note: Tavily basic search does not support date range filtering; results
+    reflect recent news at query time, not strictly bounded by start_date/end_date.
+    The date parameters are included in the output header for context only.
+
     Args:
         ticker: Stock ticker symbol (e.g., "AAPL")
         start_date: Start date in yyyy-mm-dd format
@@ -69,6 +73,11 @@ def get_global_news_tavily(
     limit: int = 10,
 ) -> str:
     """Retrieve global/macro economic news using the Tavily search API.
+
+    Note: Tavily basic search does not support date range filtering; results
+    reflect recent news at query time, not strictly bounded by the computed
+    date window. The date parameters are included in the output header for
+    context only.
 
     Args:
         curr_date: Current date in yyyy-mm-dd format
