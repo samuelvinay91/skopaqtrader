@@ -34,6 +34,9 @@ SkopaqTrader extends the [TradingAgents](https://github.com/TauricResearch/Tradi
 
 **Key capabilities:**
 
+- **Claude Code Integration** — Native MCP server with 18 tools + custom slash commands (`/analyze`, `/quote`, `/scan`, `/portfolio`, `/trade`). Run the full 15-agent analysis pipeline using Claude's own reasoning at zero extra LLM cost.
+- **Interactive AI Chat** — Claude Code-style REPL (`skopaq chat`) with streaming responses, tool panels, human-in-the-loop trade confirmation, and LangGraph checkpointing.
+- **Ollama Local Fallback** — Run analyst roles on local models via Ollama/MLX for offline operation and zero API cost.
 - **Post-Trade Reflection Loop** — Reflection node analyzes past trades and injects history into the analyst context, enabling the system to incorporate lessons from wins and losses over time.
 - **Persistent Agent Memory** — BM25-indexed memory store backed by Supabase for long-term strategic recall across all agent roles.
 - **Multi-agent analysis** — Analyst team (market, news, social, fundamentals), bull/bear researchers, risk manager, and trader agent collaborate via LangGraph.
@@ -68,6 +71,8 @@ graph TD
     classDef external fill:#475569,stroke:#334155,stroke-width:2px,color:#fff
 
     subgraph UI["User Interfaces"]
+        ClaudeCode["Claude Code + MCP"]:::interface
+        ChatREPL["Chat REPL"]:::interface
         CLI["CLI Interface"]:::interface
         API["FastAPI Backend"]:::interface
         Dashboard["Next.js Dashboard"]:::interface
@@ -92,6 +97,8 @@ graph TD
         Redis["Redis LangCache<br/>Semantic LLM Caching"]:::external
     end
 
+    ClaudeCode --> Orchestrator
+    ChatREPL --> Orchestrator
     CLI --> Orchestrator
     API --> Orchestrator
     Dashboard --> Orchestrator
@@ -227,19 +234,22 @@ flowchart TD
 
 ### Multi-Model Tiering
 
-| Agent Role | Primary Model | Fallback |
-|------------|---------------|----------|
-| Market / Fundamentals Analyst | Gemini 3 Flash | — |
-| Social Analyst | Grok 3 Mini (via OpenRouter) | Gemini 3 Flash |
-| News Analyst | Gemini 3 Flash | — |
-| Research Manager | Claude Opus 4.6 | Gemini 3 Flash |
-| Risk Manager | Claude Opus 4.6 | Gemini 3 Flash |
-| Bull / Bear / Debate Researchers | Gemini 3 Flash | — |
-| Trader | Gemini 3 Flash | — |
-| Sell Analyst | Gemini 3 Flash | — |
-| Scanner Screeners | Gemini 3 Flash, Grok 3 Mini, Perplexity Sonar | (concurrent) |
+| Agent Role | Primary Model | Fallback | Local Fallback |
+|------------|---------------|----------|----------------|
+| Market / Fundamentals Analyst | Gemini 3 Flash | — | Ollama (auto) |
+| Social Analyst | Grok 3 Mini (via OpenRouter) | Gemini 3 Flash | Ollama (auto) |
+| News Analyst | Gemini 3 Flash | — | Ollama (auto) |
+| Research Manager | Claude Opus 4.6 | Gemini 3 Flash | — (quality critical) |
+| Risk Manager | Claude Opus 4.6 | Gemini 3 Flash | — (quality critical) |
+| Chat Brain | Claude Opus 4.6 | Gemini 3 Flash | Ollama (auto) |
+| Bull / Bear / Debate Researchers | Gemini 3 Flash | — | Ollama (auto) |
+| Trader | Gemini 3 Flash | — | Ollama (auto) |
+| Sell Analyst | Gemini 3 Flash | — | Ollama (auto) |
+| Scanner Screeners | Gemini 3 Flash, Grok 3 Mini, Perplexity Sonar | (concurrent) | — |
 
 > **Note:** Perplexity Sonar is used only in the scanner (plain prompts). It does not support tool calling, so it cannot serve as an analyst in the LangGraph agent pipeline.
+>
+> **Ollama fallback** activates only when `SKOPAQ_OLLAMA_ENABLED=true` and Ollama is running locally. Judge roles (Research Manager, Risk Manager) never fall back to local models.
 
 ### Blockchain Infrastructure
 
@@ -374,6 +384,144 @@ result = await graph.analyze_and_execute("RELIANCE", "2026-03-01")
 print(result.execution)
 ```
 
+### Interactive Chat (Claude Code-style REPL)
+
+```bash
+# Start the interactive AI trading assistant
+skopaq chat                    # Paper mode (default)
+skopaq chat --live             # Live mode (with confirmation)
+
+# Inside the REPL:
+> what should I trade today?   # Natural language → AI reasons + calls tools
+> /quote RELIANCE              # Instant quote (no LLM call)
+> /scan 10                     # Top 10 market candidates
+> /portfolio                   # Show positions + P&L
+> /analyze TCS                 # Full multi-agent analysis
+> /mode live                   # Switch to live mode (confirmation required)
+```
+
+## Claude Code Integration (MCP + Skills)
+
+SkopaqTrader integrates natively with [Claude Code](https://claude.ai/code) as an MCP server + custom slash commands. This turns Claude Code into a **full-featured trading terminal** — with Claude's own reasoning powering the multi-agent analysis pipeline at zero extra LLM cost.
+
+### Quick Setup (3 steps)
+
+**Step 1: Install SkopaqTrader**
+
+```bash
+git clone https://github.com/samuelvinay91/skopaqtrader.git
+cd skopaqtrader
+pip install -e .
+cp .env.example .env   # Add your API keys
+```
+
+**Step 2: Register MCP Server**
+
+Add to your `~/.claude.json` (or run `/mcp add` in Claude Code):
+
+```json
+{
+  "mcpServers": {
+    "skopaq": {
+      "command": "python3",
+      "args": ["-m", "skopaq.mcp_server"]
+    }
+  }
+}
+```
+
+**Step 3: Restart Claude Code**
+
+Open Claude Code in the `skopaqtrader` directory. The MCP server starts automatically. You'll see 18 trading tools available.
+
+### Custom Slash Commands (Skills)
+
+These are pre-built in `.claude/skills/` and available immediately:
+
+| Command | What it does |
+|---------|-------------|
+| `/quote RELIANCE` | Real-time stock quote via MCP |
+| `/analyze TCS` | Full 15-agent analysis pipeline — Claude reasons through 4 analysts, bull/bear debate, risk debate, and final decision using its own LLM |
+| `/scan` | Market scanner — finds top trading candidates |
+| `/portfolio` | Shows positions, holdings, funds, P&L |
+| `/trade INFY` | Analysis + safety check + paper execution (with confirmation) |
+
+### MCP Tools (18 available)
+
+All tools are callable by Claude Code natively. Read-only tools are auto-approved via `.claude/settings.json`:
+
+| Category | Tools |
+|----------|-------|
+| **Market Data** | `get_quote`, `get_historical` |
+| **Portfolio** | `get_positions`, `get_holdings`, `get_funds`, `get_orders` |
+| **Analysis** | `analyze_stock`, `scan_market`, `check_safety` |
+| **Execution** | `place_order` (paper/live, safety-checked) |
+| **Data Pipeline** | `gather_market_data`, `gather_news_data`, `gather_fundamentals_data`, `gather_social_data`, `gather_all_analysis_data` |
+| **Memory** | `recall_agent_memories`, `save_trade_reflection` |
+| **System** | `system_status` |
+
+### Dual-Mode Architecture
+
+SkopaqTrader has two execution paths for the same multi-agent pipeline:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Claude Code Mode (zero LLM cost)                        │
+│                                                         │
+│  /analyze RELIANCE                                      │
+│    → gather_all_analysis_data (MCP) → raw data          │
+│    → Claude reasons as 4 analysts                       │
+│    → Claude runs bull/bear debate                       │
+│    → Claude acts as research manager (judge)             │
+│    → Claude runs 3-way risk debate                      │
+│    → Claude acts as risk manager → BUY/SELL/HOLD + %    │
+│    → check_safety (MCP) → validated                     │
+│                                                         │
+│  Uses: Claude's own LLM for all reasoning               │
+│  Cost: $0 additional (Claude Code subscription only)    │
+│  Time: ~30s data fetch + Claude's reasoning             │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ API Mode (separate LLM calls)                           │
+│                                                         │
+│  skopaq analyze RELIANCE                                │
+│    → SkopaqTradingGraph.analyze()                       │
+│    → 4 analyst LLM calls (Gemini Flash)                 │
+│    → Bull/Bear researcher calls (Gemini Flash)          │
+│    → Research Manager call (Claude Opus API)            │
+│    → Trader call (Gemini Flash)                         │
+│    → 3 risk debater calls (Gemini Flash)                │
+│    → Risk Manager call (Claude Opus API)                │
+│                                                         │
+│  Uses: Separate API calls to Gemini/Claude/Grok         │
+│  Cost: ~$0.20-0.50 per analysis                         │
+│  Time: 2-5 minutes                                      │
+└─────────────────────────────────────────────────────────┘
+```
+
+Both modes use the **same data sources** and the **same agent prompts** — the only difference is who does the reasoning.
+
+### Ollama Local Model Fallback
+
+For offline operation or zero-cost inference, SkopaqTrader supports local models via [Ollama](https://ollama.ai):
+
+```bash
+# Install Ollama (macOS)
+brew install ollama
+ollama pull mistral    # or any model
+
+# Enable in SkopaqTrader
+export SKOPAQ_OLLAMA_ENABLED=true
+skopaq chat            # Uses local model as fallback when cloud APIs fail
+```
+
+Local models serve as the **last fallback** in the provider chain. Judge roles (research_manager, risk_manager) skip local models to preserve reasoning quality.
+
+### OpenClaw Integration
+
+SkopaqTrader also integrates with [OpenClaw](https://openclaw.ai) for multi-channel access via WhatsApp, Telegram, and Slack. See `openclaw.json` for configuration.
+
 ### Upstream TradingAgents (Direct)
 
 The vendored upstream is fully functional:
@@ -407,21 +555,29 @@ skopaqtrader/
 │   ├── api/                    # FastAPI backend server
 │   ├── blockchain/             # Gas oracle, whale alerts
 │   ├── broker/                 # INDstocks REST/WebSocket + Binance + paper engine
-│   ├── cli/                    # Typer CLI (analyze, trade, scan, daemon, monitor)
+│   ├── chat/                   # Interactive chatbot (REPL, tools, agent, bridge)
+│   ├── cli/                    # Typer CLI (analyze, trade, scan, daemon, monitor, chat)
 │   ├── db/                     # Supabase client + repositories
 │   ├── execution/              # Executor, safety checker, order router, daemon, monitor
 │   ├── graph/                  # SkopaqTradingGraph (upstream wrapper)
-│   ├── llm/                    # Multi-model tiering, env bridge, semantic cache
-│   ├── memory/                 # BM25-indexed agent memory (Supabase-backed)
+│   ├── llm/                    # Multi-model tiering, env bridge, semantic cache, Ollama
+│   ├── memory/                 # BM25-indexed agent memory + trade reflection loop
 │   ├── risk/                   # ATR sizing, regime detection, drawdown, calendar
 │   ├── scanner/                # Multi-model market scanner engine
+│   ├── mcp_server.py           # MCP server (18 tools for Claude Code integration)
 │   ├── config.py               # Pydantic Settings (env_prefix="SKOPAQ_")
 │   └── constants.py            # Immutable safety rules + daemon variants
 │
 ├── frontend/                   # Next.js dashboard (Vercel)
 ├── supabase/                   # Database migrations
 ├── docker/                     # Dockerfile for Railway
-├── tests/                      # 466 unit + integration tests
+├── .claude/                    # Claude Code integration
+│   ├── skills/                 # Custom slash commands (/quote, /analyze, /scan, etc.)
+│   ├── settings.json           # Auto-allowed MCP tools
+│   └── .mcp.json               # MCP server registration
+│
+├── openclaw/                   # OpenClaw skill wrappers (WhatsApp/Telegram/Slack)
+├── tests/                      # 540 unit + integration tests
 │   ├── unit/                   # Fast tests (no API keys needed)
 │   └── integration/            # Real API calls (requires .env)
 │
@@ -446,7 +602,7 @@ If you discover a security issue, please report it privately rather than opening
 
 ## Testing
 
-The test suite contains **466 unit tests** (no API keys needed) plus integration tests for real broker/LLM calls.
+The test suite contains **540 unit tests** (no API keys needed) plus integration tests for real broker/LLM calls.
 
 ```bash
 # Unit tests — fast, no external dependencies
@@ -503,6 +659,39 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 3. Write tests for your changes
 4. Ensure all tests pass (`python -m pytest tests/unit/ -v`)
 5. Submit a pull request
+
+### Contributing New Skills
+
+Add custom Claude Code slash commands in `.claude/skills/<name>/SKILL.md`:
+
+```markdown
+---
+name: my-skill
+description: What it does
+argument-hint: <SYMBOL>
+user-invocable: true
+allowed-tools: mcp__skopaq__get_quote mcp__skopaq__get_historical
+---
+
+# My Skill
+
+Instructions for Claude Code when this skill is invoked.
+Use MCP tools (mcp__skopaq__*) for data — do NOT write Python code to call broker APIs directly.
+```
+
+### Contributing New MCP Tools
+
+Add tools to `skopaq/mcp_server.py` using the `@mcp.tool()` decorator:
+
+```python
+@mcp.tool()
+async def my_tool(symbol: str) -> str:
+    """Description of what this tool does."""
+    # Call existing infrastructure
+    return json.dumps({"result": "..."})
+```
+
+Then add the tool name to `.claude/settings.json` permissions for auto-approval.
 
 ## Citation
 
