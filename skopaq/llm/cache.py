@@ -246,11 +246,13 @@ class LangCacheSemanticCache(BaseCache):
             logger.debug("Cache MISS (%.1fms)", elapsed_ms)
             return None
 
-        except Exception:
+        except Exception as exc:
             elapsed_ms = (time.monotonic() - t0) * 1000
             self._stats.total_lookup_ms += elapsed_ms
             self._stats.errors += 1
-            logger.warning("Cache lookup error (%.1fms)", elapsed_ms, exc_info=True)
+            # Log concisely — full tracebacks are noisy for expected failures
+            # (e.g. Upstash down, rate limited)
+            logger.debug("Cache lookup error (%.1fms): %s", elapsed_ms, exc)
             return None
 
     def update(self, prompt: str, llm_string: str, return_val: RETURN_VAL_TYPE) -> None:
@@ -279,11 +281,11 @@ class LangCacheSemanticCache(BaseCache):
                 "Cache STORE (%.1fms, %d chars)",
                 elapsed_ms, len(serialized),
             )
-        except Exception:
+        except Exception as exc:
             elapsed_ms = (time.monotonic() - t0) * 1000
             self._stats.total_store_ms += elapsed_ms
             self._stats.errors += 1
-            logger.warning("Cache store error (%.1fms)", elapsed_ms, exc_info=True)
+            logger.debug("Cache store error (%.1fms): %s", elapsed_ms, exc)
 
     def clear(self, **kwargs: Any) -> None:
         """No-op — the managed service handles eviction/TTL."""
@@ -300,19 +302,35 @@ class LangCacheSemanticCache(BaseCache):
 # Factory
 # ---------------------------------------------------------------------------
 
-def init_langcache(config: Any) -> Optional[LangCacheSemanticCache]:
-    """Create a ``LangCacheSemanticCache`` from SkopaqConfig.
+def _make_in_memory_cache() -> BaseCache:
+    """Create LangChain's built-in InMemoryCache as a fallback.
 
-    Returns ``None`` when:
-    - ``langcache_enabled`` is False
-    - Required credentials are missing
-    - The ``langcache`` package is not installed
+    Provides exact-match caching within the current process — no external
+    dependencies.  Useful for avoiding redundant LLM calls within a single
+    session (e.g. agent retries, repeated slash commands).
+    """
+    from langchain_core.caches import InMemoryCache
 
-    This follows the same graceful-degradation pattern used elsewhere
-    in Skopaq (e.g. MemoryStore, RegimeDetector).
+    logger.info("Using in-memory LLM cache (exact-match, session-scoped)")
+    return InMemoryCache()
+
+
+def init_langcache(config: Any) -> Optional[BaseCache]:
+    """Create the best available LLM cache from SkopaqConfig.
+
+    Priority:
+    1. **LangCache semantic cache** (Upstash Redis) — if enabled and
+       credentials are present.
+    2. **In-memory cache** — always available, zero config.  Provides
+       exact-match caching within the current process.
+
+    Returns ``None`` only when ``langcache_enabled`` is explicitly
+    ``False`` **and** the caller doesn't want any cache.
     """
     if not getattr(config, "langcache_enabled", False):
-        return None
+        # Even when the semantic cache is disabled, provide in-memory
+        # caching so repeated identical prompts don't cost extra.
+        return _make_in_memory_cache()
 
     api_key = ""
     if hasattr(config, "langcache_api_key"):
@@ -323,11 +341,11 @@ def init_langcache(config: Any) -> Optional[LangCacheSemanticCache]:
 
     if not api_key or not server_url or not cache_id:
         logger.debug(
-            "LangCache credentials incomplete — cache disabled "
+            "LangCache credentials incomplete — falling back to in-memory "
             "(url=%s, cache_id=%s, key=%s)",
             bool(server_url), bool(cache_id), bool(api_key),
         )
-        return None
+        return _make_in_memory_cache()
 
     try:
         cache = LangCacheSemanticCache(
@@ -342,5 +360,8 @@ def init_langcache(config: Any) -> Optional[LangCacheSemanticCache]:
         )
         return cache
     except Exception:
-        logger.warning("Failed to initialise LangCache — continuing without cache", exc_info=True)
-        return None
+        logger.warning(
+            "Failed to initialise LangCache — falling back to in-memory cache",
+            exc_info=True,
+        )
+        return _make_in_memory_cache()

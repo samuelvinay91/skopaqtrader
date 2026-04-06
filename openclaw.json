@@ -1,0 +1,108 @@
+{
+  "name": "SkopaqTrader",
+  "description": "AI trading assistant for Indian equities and crypto",
+  "brain": {
+    "provider": "custom",
+    "endpoint": "http://localhost:8000/api/chat/message"
+  },
+  "memory": {
+    "type": "markdown",
+    "path": ".openclaw/memory"
+  },
+  "skills": [
+    {
+      "name": "analyze",
+      "description": "Run AI analysis on a stock symbol (takes 2-5 minutes)",
+      "trigger": "analyze {symbol}",
+      "action": {
+        "type": "http",
+        "method": "POST",
+        "url": "http://localhost:8000/api/chat/tool",
+        "body": {
+          "tool": "analyze_stock",
+          "args": { "symbol": "{{symbol}}" }
+        }
+      }
+    },
+    {
+      "name": "trade",
+      "description": "Analyze and execute a trade (paper mode by default)",
+      "trigger": "trade {symbol}",
+      "action": {
+        "type": "http",
+        "method": "POST",
+        "url": "http://localhost:8000/api/chat/tool",
+        "body": {
+          "tool": "trade_stock",
+          "args": { "symbol": "{{symbol}}" }
+        }
+      }
+    },
+    {
+      "name": "scan",
+      "description": "Scan the market for top trading candidates",
+      "trigger": "scan",
+      "action": {
+        "type": "http",
+        "method": "POST",
+        "url": "http://localhost:8000/api/chat/tool",
+        "body": {
+          "tool": "scan_market",
+          "args": {}
+        }
+      }
+    },
+    {
+      "name": "portfolio",
+      "description": "Show current portfolio positions, holdings, and P&L",
+      "trigger": "portfolio",
+      "action": {
+        "type": "http",
+        "method": "POST",
+        "url": "http://localhost:8000/api/chat/tool",
+        "body": {
+          "tool": "get_portfolio",
+          "args": {}
+        }
+      }
+    },
+    {
+      "name": "quote",
+      "description": "Get real-time stock quote",
+      "trigger": "quote {symbol}",
+      "action": {
+        "type": "http",
+        "method": "POST",
+        "url": "http://localhost:8000/api/chat/tool",
+        "body": {
+          "tool": "get_quote",
+          "args": { "symbol": "{{symbol}}" }
+        }
+      }
+    }
+  ],
+  "channels": {
+    "whatsapp": {
+      "enabled": false,
+      "provider": "twilio",
+      "account_sid": "${SKOPAQ_TWILIO_ACCOUNT_SID}",
+      "auth_token": "${SKOPAQ_TWILIO_AUTH_TOKEN}",
+      "phone_number": "${SKOPAQ_TWILIO_PHONE_NUMBER}"
+    },
+    "telegram": {
+      "enabled": false,
+      "bot_token": "${SKOPAQ_TELEGRAM_BOT_TOKEN}"
+    },
+    "slack": {
+      "enabled": false,
+      "bot_token": "${SKOPAQ_SLACK_BOT_TOKEN}",
+      "app_token": "${SKOPAQ_SLACK_APP_TOKEN}"
+    }
+  },
+  "heartbeat": {
+    "enabled": false,
+    "cron": "0 9 * * 1-5",
+    "timezone": "Asia/Kolkata",
+    "action": "scan"
+  }
+}

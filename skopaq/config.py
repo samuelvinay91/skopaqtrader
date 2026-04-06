@@ -135,5 +135,10 @@ class SkopaqConfig(BaseSettings):
     ws_reconnect_enabled: bool = True
     ws_reconnect_delay_seconds: float = 5.0
 
+    # ── Ollama (Local LLM Fallback) ──────────────────────────────────────────
+    ollama_enabled: bool = False        # Opt-in: set True to use local models
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = ""              # Auto-detect if empty
+
     # ── Logging ─────────────────────────────────────────────────────────────
     log_level: str = "INFO"

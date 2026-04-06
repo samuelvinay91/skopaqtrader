@@ -33,6 +33,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Chat bridge (OpenClaw + external channels) ───────────────────────────────
+from skopaq.chat.bridge import router as chat_router
+
+app.include_router(chat_router)
+
 
 @app.get("/health")
 async def health() -> dict:

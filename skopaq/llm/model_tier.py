@@ -22,7 +22,8 @@ Note: Perplexity Sonar is used for the scanner's news screener (plain
 prompts), NOT for the news_analyst agent (which needs tool calling).
 
 Each role gracefully falls back to Gemini Flash if its preferred
-provider key is missing.
+provider key is missing.  When Ollama is enabled, local models serve
+as the **last** fallback for non-judge roles — zero cost, works offline.
 """
 
 from __future__ import annotations
@@ -34,24 +35,29 @@ from langchain_core.language_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
 
+# Cached Ollama availability check (set on first call to _has_key)
+_ollama_available: bool | None = None
+
 # Role → (provider, model) tuples.  First match with an available key wins.
 # OpenRouter is used as gateway for Grok (xAI) and Perplexity Sonar models.
 _ROLE_PREFERENCES: dict[str, list[tuple[str, str]]] = {
-    "market_analyst":       [("google", "gemini-3-flash-preview")],
-    "social_analyst":       [("openrouter", "x-ai/grok-3-mini"), ("xai", "grok-3-mini"), ("google", "gemini-3-flash-preview")],
+    "market_analyst":       [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "social_analyst":       [("openrouter", "x-ai/grok-3-mini"), ("xai", "grok-3-mini"), ("google", "gemini-3-flash-preview"), ("ollama", "auto")],
     # Perplexity Sonar doesn't support tool calling via OpenRouter (404).
     # Agent analysts need bind_tools() → must use a tool-capable model.
-    "news_analyst":         [("google", "gemini-3-flash-preview")],
-    "fundamentals_analyst": [("google", "gemini-3-flash-preview")],
-    "bull_researcher":      [("google", "gemini-3-flash-preview")],
-    "bear_researcher":      [("google", "gemini-3-flash-preview")],
+    "news_analyst":         [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "fundamentals_analyst": [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "bull_researcher":      [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "bear_researcher":      [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    # Judge roles: NO local fallback — reasoning quality is critical
     "research_manager":     [("anthropic", "claude-opus-4-6"), ("google", "gemini-3-flash-preview")],
     "risk_manager":         [("anthropic", "claude-opus-4-6"), ("google", "gemini-3-flash-preview")],
-    "trader":               [("google", "gemini-3-flash-preview")],
-    "aggressive_debator":   [("google", "gemini-3-flash-preview")],
-    "neutral_debator":      [("google", "gemini-3-flash-preview")],
-    "conservative_debator": [("google", "gemini-3-flash-preview")],
-    "sell_analyst":         [("google", "gemini-3-flash-preview")],
+    "trader":               [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "aggressive_debator":   [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "neutral_debator":      [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "conservative_debator": [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "sell_analyst":         [("google", "gemini-3-flash-preview"), ("ollama", "auto")],
+    "chat_brain":           [("anthropic", "claude-opus-4-6"), ("google", "gemini-3-flash-preview"), ("ollama", "auto")],
 }
 
 # Env var names per provider (checked to see if key is available)
@@ -63,19 +69,106 @@ _PROVIDER_ENV_KEYS: dict[str, str] = {
     "openrouter": "OPENROUTER_API_KEY",
 }
 
+# Default Ollama settings (overridable via SkopaqConfig)
+_OLLAMA_BASE_URL = "http://localhost:11434"
+
+
+def _is_ollama_available() -> bool:
+    """Check if Ollama is running locally by pinging the API."""
+    global _ollama_available
+    if _ollama_available is not None:
+        return _ollama_available
+
+    import os
+
+    # Opt-in: SKOPAQ_OLLAMA_ENABLED must be set
+    if not os.environ.get("SKOPAQ_OLLAMA_ENABLED", "").lower() in ("1", "true", "yes"):
+        _ollama_available = False
+        return False
+
+    try:
+        import urllib.request
+
+        base_url = os.environ.get("SKOPAQ_OLLAMA_BASE_URL", _OLLAMA_BASE_URL)
+        req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            _ollama_available = resp.status == 200
+    except Exception:
+        _ollama_available = False
+
+    if _ollama_available:
+        logger.info("Ollama detected at %s — local fallback enabled", _OLLAMA_BASE_URL)
+    return _ollama_available
+
+
+def _get_ollama_model() -> str:
+    """Get the best available Ollama model."""
+    import os
+
+    configured = os.environ.get("SKOPAQ_OLLAMA_MODEL", "")
+    if configured:
+        return configured
+
+    # Auto-detect: pick the first available model
+    try:
+        import json
+        import urllib.request
+
+        base_url = os.environ.get("SKOPAQ_OLLAMA_BASE_URL", _OLLAMA_BASE_URL)
+        req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read())
+            models = data.get("models", [])
+            if models:
+                name = models[0].get("name", "")
+                logger.info("Ollama auto-detected model: %s", name)
+                return name
+    except Exception:
+        pass
+
+    return "mistral"  # Safe default
+
 
 def _has_key(provider: str) -> bool:
     """Check if the env var for *provider* is set and non-empty."""
     import os
+
+    if provider == "ollama":
+        return _is_ollama_available()
+
     env_var = _PROVIDER_ENV_KEYS.get(provider, "")
     return bool(os.environ.get(env_var))
 
 
 def _create_llm(provider: str, model: str, **kwargs) -> BaseChatModel:
-    """Create a LangChain chat model via the upstream factory."""
+    """Create a LangChain chat model for the given provider."""
+    if provider == "ollama":
+        return _create_ollama_llm(model)
+
     from tradingagents.llm_clients import create_llm_client
     client = create_llm_client(provider=provider, model=model, **kwargs)
     return client.get_llm()
+
+
+def _create_ollama_llm(model: str) -> BaseChatModel:
+    """Create a ChatOllama instance for local inference."""
+    import os
+
+    from langchain_ollama import ChatOllama
+
+    base_url = os.environ.get("SKOPAQ_OLLAMA_BASE_URL", _OLLAMA_BASE_URL)
+
+    # "auto" means auto-detect the best available model
+    if model == "auto":
+        model = _get_ollama_model()
+
+    llm = ChatOllama(
+        model=model,
+        base_url=base_url,
+        temperature=0.1,  # Low temperature for trading analysis
+    )
+    logger.info("Created Ollama LLM: %s at %s", model, base_url)
+    return llm
 
 
 def build_llm_map(config: dict[str, Any] | None = None) -> dict[str, BaseChatModel]:

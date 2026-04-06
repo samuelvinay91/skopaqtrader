@@ -415,29 +415,41 @@ class TestLangCacheSemanticCache:
 class TestInitLangcache:
     """Tests for the init_langcache() factory function."""
 
-    def test_disabled_returns_none(self):
+    def test_disabled_returns_in_memory(self):
+        from langchain_core.caches import InMemoryCache
+
         from skopaq.llm.cache import init_langcache
 
         config = _make_config(enabled=False)
-        assert init_langcache(config) is None
+        cache = init_langcache(config)
+        assert isinstance(cache, InMemoryCache)
 
-    def test_missing_api_key_returns_none(self):
+    def test_missing_api_key_returns_in_memory(self):
+        from langchain_core.caches import InMemoryCache
+
         from skopaq.llm.cache import init_langcache
 
         config = _make_config(api_key="")
-        assert init_langcache(config) is None
+        cache = init_langcache(config)
+        assert isinstance(cache, InMemoryCache)
 
-    def test_missing_server_url_returns_none(self):
+    def test_missing_server_url_returns_in_memory(self):
+        from langchain_core.caches import InMemoryCache
+
         from skopaq.llm.cache import init_langcache
 
         config = _make_config(server_url="")
-        assert init_langcache(config) is None
+        cache = init_langcache(config)
+        assert isinstance(cache, InMemoryCache)
 
-    def test_missing_cache_id_returns_none(self):
+    def test_missing_cache_id_returns_in_memory(self):
+        from langchain_core.caches import InMemoryCache
+
         from skopaq.llm.cache import init_langcache
 
         config = _make_config(cache_id="")
-        assert init_langcache(config) is None
+        cache = init_langcache(config)
+        assert isinstance(cache, InMemoryCache)
 
     @patch("langcache.LangCache")
     def test_success_returns_cache(self, MockLangCache):
@@ -454,13 +466,16 @@ class TestInitLangcache:
         )
 
     @patch("langcache.LangCache")
-    def test_sdk_import_error_returns_none(self, MockLangCache):
+    def test_sdk_import_error_returns_in_memory(self, MockLangCache):
+        from langchain_core.caches import InMemoryCache
+
         from skopaq.llm.cache import init_langcache
 
         MockLangCache.side_effect = ImportError("No module named 'langcache'")
         config = _make_config()
 
-        assert init_langcache(config) is None
+        cache = init_langcache(config)
+        assert isinstance(cache, InMemoryCache)
 
     @patch("langcache.LangCache")
     def test_threshold_passed_correctly(self, MockLangCache):

@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__skopaq__get_quote",
+      "mcp__skopaq__get_historical",
+      "mcp__skopaq__get_positions",
+      "mcp__skopaq__get_holdings",
+      "mcp__skopaq__get_funds",
+      "mcp__skopaq__get_orders",
+      "mcp__skopaq__system_status",
+      "mcp__skopaq__check_safety",
+      "mcp__skopaq__gather_market_data",
+      "mcp__skopaq__gather_news_data",
+      "mcp__skopaq__gather_fundamentals_data",
+      "mcp__skopaq__gather_social_data",
+      "mcp__skopaq__gather_all_analysis_data",
+      "mcp__skopaq__recall_agent_memories",
+      "Bash(python3 -m pytest tests/unit/ -x -q)",
+      "Bash(python3 -m pytest tests/unit/ -x -v)",
+      "Bash(skopaq status)",
+      "Bash(skopaq version)",
+      "Bash(skopaq chat --help)"
+    ],
+    "deny": []
+  }
+}

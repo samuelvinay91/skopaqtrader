@@ -241,8 +241,14 @@ frontend/out/
 results/
 .cache/
 
-# Claude Code
-.claude/
+# Claude Code — ignore local/temp files, keep shareable config
+.claude/*
+!.claude/skills/
+!.claude/settings.json
+!.claude/.mcp.json
+.claude/settings.local.json
+.claude/plans/
+.claude/launch.json
 
 # OS files
 .DS_Store

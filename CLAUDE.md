@@ -29,10 +29,34 @@ PRE_OPEN → SCANNING → ANALYZING → TRADING → MONITORING → CLOSING → R
 
 The daemon (`skopaq/execution/daemon.py`) is a finite state machine that composes all subsystems into a single unattended trading session.
 
+## MCP Server (Claude Code Integration)
+
+SkopaqTrader exposes a **MCP server** (`skopaq/mcp_server.py`) that provides 11 trading tools directly inside Claude Code. Configured in `.claude/.mcp.json`.
+
+**IMPORTANT**: When fetching market data, quotes, or portfolio info — always use the MCP tools (`mcp__skopaq__*`). Do NOT write Python/Bash code to call `INDstocksClient` or other broker modules directly. The MCP tools handle authentication, scrip resolution, and error handling internally.
+
+**Available MCP tools** (auto-allowed for read-only, require permission for trades):
+
+| Tool | What it does |
+|------|-------------|
+| `get_quote` | Real-time stock quote (LTP, OHLC, bid/ask) |
+| `get_historical` | OHLCV candles (1/5/15/60 min resolution) |
+| `get_positions` | Open positions with P&L |
+| `get_holdings` | Delivery holdings |
+| `get_funds` | Cash balance, margin, collateral |
+| `get_orders` | Today's orders with status |
+| `analyze_stock` | Full multi-agent AI analysis (2-5 min) |
+| `scan_market` | Multi-model market scan for candidates |
+| `check_safety` | Pre-trade safety validation |
+| `place_order` | Execute order (paper/live, safety-checked) |
+| `system_status` | Health check (version, mode, LLMs) |
+
+**Custom slash commands**: `/quote RELIANCE`, `/analyze TCS`, `/scan`, `/portfolio`, `/trade INFY`
+
 ## Common Commands
 
 ```bash
-# Run unit tests (466 tests, no API keys needed)
+# Run unit tests (540 tests, no API keys needed)
 python3 -m pytest tests/unit/ -x -q
 
 # Run a specific test file
@@ -46,6 +70,7 @@ skopaq status              # Health check
 skopaq analyze RELIANCE    # Analysis only
 skopaq trade RELIANCE      # Analysis + execution (paper default)
 skopaq scan                # Scanner cycle
+skopaq chat                # Interactive AI chatbot (Claude Code-style)
 skopaq daemon --once --paper  # Full autonomous session
 skopaq monitor             # Monitor existing positions
 skopaq serve               # FastAPI server

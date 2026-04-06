@@ -718,6 +718,40 @@ async def _run_daemon(config, *, once: bool = False, dry_run: bool = False):
     return await daemon_instance.run_session(dry_run=dry_run)
 
 
+# ── Chat ─────────────────────────────────────────────────────────────────────
+
+
+@app.command("chat")
+def chat(
+    live: bool = typer.Option(False, "--live", help="Start in live trading mode."),
+    confirm_live: bool = typer.Option(
+        False, "--confirm-live", help="Skip live-mode confirmation prompt.",
+    ),
+) -> None:
+    """Interactive AI trading assistant (Claude Code-style REPL)."""
+    from skopaq.config import SkopaqConfig
+
+    config = SkopaqConfig()
+
+    if live:
+        if not confirm_live:
+            typer.echo(
+                "\n  WARNING: Live mode uses REAL money on INDstocks/Binance.\n"
+            )
+            if not typer.confirm("  Start in LIVE mode?", default=False):
+                typer.echo("  Starting in paper mode instead.")
+                live = False
+
+        if live:
+            config.trading_mode = "live"
+
+    from skopaq.chat.repl import run_repl
+    from skopaq.chat.session import ChatSession
+
+    session = ChatSession(config)
+    asyncio.run(run_repl(session))
+
+
 # ── Serve ────────────────────────────────────────────────────────────────────
 
 
