@@ -1619,6 +1619,99 @@ async def run_monte_carlo_test(
 
 
 @mcp.tool()
+async def get_learning_insights() -> str:
+    """Get AI learning insights from past trading performance.
+
+    Analyzes all recorded trades to find:
+    - Which stocks the AI is best/worst at trading
+    - Confidence calibration (is the AI overconfident or underconfident?)
+    - Sector performance (which sectors have edge?)
+    - Stop-loss effectiveness (too tight or too loose?)
+    - Timing patterns (when do entries work best?)
+
+    These insights should inform future trading decisions.
+    """
+    try:
+        from skopaq.learning.tracker import (
+            generate_learning_insights,
+            get_confidence_calibration,
+            get_sector_performance,
+            get_timing_patterns,
+            get_stop_loss_analysis,
+        )
+
+        insights = generate_learning_insights()
+
+        # Add detailed breakdowns
+        sections = [insights, ""]
+
+        calibration = get_confidence_calibration()
+        if calibration:
+            sections.append("Confidence Calibration:")
+            for c in calibration:
+                sections.append(
+                    f"  {c['confidence_range']}%: stated={c['stated_confidence']:.0f}% "
+                    f"actual={c['actual_win_rate']:.0f}% gap={c['calibration_gap']:+.0f}%"
+                )
+
+        sectors = get_sector_performance()
+        if sectors:
+            sections.append("\nSector Performance:")
+            for s in sectors:
+                sections.append(
+                    f"  {s['sector']}: {s['win_rate']:.0f}% win ({s['trades']} trades) "
+                    f"P&L={s['total_pnl']:+,.0f}"
+                )
+
+        timing = get_timing_patterns()
+        if timing:
+            sections.append("\nTiming Patterns:")
+            for t in timing:
+                sections.append(
+                    f"  {t['hour']}: {t['win_rate']:.0f}% win ({t['trades']} trades)"
+                )
+
+        sl = get_stop_loss_analysis()
+        if sl:
+            sections.append(f"\nStop-Loss: {sl.get('stop_hit_rate', 0):.0f}% hit rate")
+
+        return "\n".join(sections)
+
+    except Exception as exc:
+        return f"Learning insights error: {exc}"
+
+
+@mcp.tool()
+async def get_symbol_stats(symbol: str) -> str:
+    """Get AI trading performance stats for a specific symbol.
+
+    Shows win rate, average P&L, confidence accuracy, and holding period
+    based on all past trades for this symbol.
+
+    Args:
+        symbol: Stock symbol to check performance for.
+    """
+    try:
+        from skopaq.learning.tracker import get_symbol_accuracy
+
+        stats = get_symbol_accuracy(symbol)
+        if not stats or stats.get("total_trades", 0) == 0:
+            return f"No trading history for {symbol}"
+
+        return (
+            f"AI Performance: {symbol}\n\n"
+            f"Total Trades: {stats['total_trades']}\n"
+            f"Win Rate: {stats['win_rate']:.1f}%\n"
+            f"Avg P&L: Rs {stats['avg_pnl']:+,.2f} ({stats['avg_pnl_pct']:+.2f}%)\n"
+            f"Avg Confidence: {stats['avg_confidence']:.0f}%\n"
+            f"Avg Holding: {stats['avg_holding_days']:.1f} days"
+        )
+
+    except Exception as exc:
+        return f"Stats error: {exc}"
+
+
+@mcp.tool()
 async def evolve_strategy(symbol: str, days: int = 180) -> str:
     """Run a complete self-evolving strategy cycle.
 
