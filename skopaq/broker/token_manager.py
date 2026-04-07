@@ -87,8 +87,38 @@ class TokenManager:
         logger.info("Token stored, expires at %s", expires_at.isoformat())
 
     def get_health(self) -> TokenHealth:
-        """Check current token validity and remaining time."""
+        """Check current token validity and remaining time.
+
+        Priority:
+        1. Encrypted token file (``~/.skopaq/token.enc``) — for local use
+        2. ``SKOPAQ_INDSTOCKS_TOKEN`` env var — for Docker/cloud deployments
+
+        The env var fallback has no expiry tracking (assumed fresh).
+        """
+        # Fallback: check env var for cloud deployments (Docker, Fly.io)
         if not TOKEN_FILE.exists():
+            import os
+
+            env_token = os.environ.get("SKOPAQ_INDSTOCKS_TOKEN", "")
+            if not env_token:
+                # Also try via SkopaqConfig (reads .env file)
+                try:
+                    from skopaq.config import SkopaqConfig
+
+                    config = SkopaqConfig()
+                    env_token = config.indstocks_token.get_secret_value()
+                except Exception:
+                    pass
+
+            if env_token:
+                return TokenHealth(
+                    valid=True,
+                    token=env_token,
+                    expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                    remaining=timedelta(hours=24),
+                    warning="",
+                )
+
             return TokenHealth(valid=False, warning="No token stored. Run: skopaq token set <token>")
 
         try:
