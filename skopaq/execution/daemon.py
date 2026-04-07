@@ -584,7 +584,7 @@ class TradingDaemon:
         return result
 
     def _log_report(self, report: DaemonSessionReport) -> None:
-        """Log the session report summary."""
+        """Log the session report summary and send Telegram notification."""
         logger.info("=" * 60)
         logger.info("DAEMON SESSION REPORT — %s", report.session_date)
         logger.info("=" * 60)
@@ -612,3 +612,31 @@ class TradingDaemon:
                 logger.warning("  - %s", err)
 
         logger.info("=" * 60)
+
+        # Notify via Telegram
+        try:
+            import asyncio
+            from skopaq.notifications import notify
+
+            msg = (
+                f"Daemon Session Complete\n\n"
+                f"Date: {report.session_date}\n"
+                f"Scanned: {report.candidates_scanned} | "
+                f"Analyzed: {report.candidates_analyzed}\n"
+                f"Trades: {report.trades_opened} opened, "
+                f"{report.trades_rejected} rejected\n"
+                f"Sells: {report.sells_executed} executed\n"
+                f"P&L: Rs {report.gross_pnl:+,.2f}\n"
+                f"Duration: {total/60:.1f} min"
+            )
+            if report.errors:
+                msg += f"\nErrors: {len(report.errors)}"
+
+            # Fire-and-forget notification
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(notify(msg))
+            except RuntimeError:
+                asyncio.run(notify(msg))
+        except Exception:
+            pass

@@ -116,6 +116,13 @@ class Executor:
         )
 
         if not safety_result.passed:
+            # Notify: safety rejection
+            await self._notify_safe(
+                "notify_trade_event",
+                signal.action, signal.symbol,
+                signal.entry_price or 0, int(signal.quantity or 1),
+                "REJECTED",
+            )
             return ExecutionResult(
                 success=False,
                 signal=signal,
@@ -126,6 +133,17 @@ class Executor:
 
         # Step 3: Route to execution backend
         result = await self._router.execute(order, signal)
+
+        # Notify: trade result
+        await self._notify_safe(
+            "notify_trade_event",
+            signal.action, signal.symbol,
+            result.fill_price or signal.entry_price or 0,
+            int(order.quantity),
+            "FILLED" if result.success else "FAILED",
+            pnl=0,
+            order_id=result.order.order_id if result.order else "",
+        )
 
         # Step 4: Record P&L for loss tracking (on fills)
         if result.success and result.fill_price and signal.action == "SELL":
@@ -146,6 +164,17 @@ class Executor:
         )
 
         return result
+
+    async def _notify_safe(self, func_name: str, *args, **kwargs) -> None:
+        """Call a notification function, silently catching errors."""
+        try:
+            import skopaq.notifications as notif
+
+            fn = getattr(notif, func_name, None)
+            if fn:
+                await fn(*args, **kwargs)
+        except Exception:
+            pass  # Notifications should never break trading
 
     async def _apply_position_sizing(
         self,

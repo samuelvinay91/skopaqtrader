@@ -148,6 +148,19 @@ class TokenManager:
                 warning = f"Token expires in {remaining}. Refresh from INDstocks dashboard."
                 self._warned_thresholds.add(mins)
                 logger.warning(warning)
+                # Notify via Telegram
+                try:
+                    import asyncio
+                    from skopaq.notifications import notify
+
+                    msg = f"⚠️ Token Warning\n\n{warning}"
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(notify(msg))
+                    except RuntimeError:
+                        pass
+                except Exception:
+                    pass
                 break
 
         return TokenHealth(

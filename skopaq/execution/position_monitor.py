@@ -362,6 +362,17 @@ class PositionMonitor:
                     exec_result.fill_price or ltp,
                     pnl,
                 )
+                # Notify via Telegram
+                try:
+                    from skopaq.notifications import notify_position_alert
+
+                    alert_type = "TRAILING_STOP" if "trail" in reason.lower() else \
+                                 "EOD_EXIT" if "eod" in reason.lower() else "TARGET_NEAR"
+                    asyncio.get_running_loop().create_task(
+                        notify_position_alert(pos.symbol, ltp, pos.entry_price, pnl, alert_type)
+                    )
+                except Exception:
+                    pass
                 return True
             else:
                 result.sells_failed += 1
