@@ -82,12 +82,25 @@ async def send_message(body: ChatMessageRequest) -> ChatMessageResponse:
 
         session.add_user_message(body.message)
         agent = session.ensure_agent()
+        config = session.thread_config
 
-        # Run agent (non-streaming for HTTP, with thread config)
+        # Run agent with auto-resume loop for interrupts.
+        # The agent uses interrupt_before=["tools"] for the interactive REPL,
+        # but the HTTP bridge has no human to confirm — auto-approve all tools.
         result = await agent.ainvoke(
             {"messages": session.get_history()},
-            config=session.thread_config,
+            config=config,
         )
+
+        # Auto-resume loop: if the agent interrupted before a tool call,
+        # resume it (approve the tool) until it finishes.
+        max_resumes = 10  # Safety limit
+        for _ in range(max_resumes):
+            state = agent.get_state(config)
+            if not state.next:
+                break  # Agent finished
+            # Resume from interrupt (auto-approve tool call)
+            result = await agent.ainvoke(None, config=config)
 
         # Extract final AI message and tool calls
         messages = result.get("messages", [])
@@ -167,7 +180,12 @@ async def call_tool(body: ToolCallRequest) -> ToolCallResponse:
 
 
 def _get_or_create_session(session_id: str) -> ChatSession:
-    """Get an existing session or create a new one."""
+    """Get an existing session or create a new one.
+
+    If ``session_id`` is provided, the new session is stored under that
+    key so subsequent calls with the same ID find it.  If empty, the
+    session's auto-generated UUID is used as the key.
+    """
     if session_id and session_id in _sessions:
         return _sessions[session_id]
 
@@ -175,7 +193,13 @@ def _get_or_create_session(session_id: str) -> ChatSession:
 
     config = SkopaqConfig()
     session = ChatSession(config)
-    _sessions[session.id] = session
+
+    # Store under the caller's ID if provided, otherwise use the session's own ID
+    key = session_id if session_id else session.id
+    _sessions[key] = session
+    # Also update session.id to match the key for consistent responses
+    if session_id:
+        session.id = session_id
     return session
 
 
