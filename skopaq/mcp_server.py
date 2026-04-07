@@ -73,6 +73,20 @@ def _get_router():
 # ── Market Data Tools ────────────────────────────────────────────────────────
 
 
+def _get_kite():
+    """Return a connected KiteClient if available."""
+    try:
+        from skopaq.broker.kite_client import KiteClient, get_access_token
+
+        token = get_access_token()
+        if not token:
+            return None
+        config = _get_config()
+        return KiteClient(api_key=config.kite_api_key, access_token=token)
+    except Exception:
+        return None
+
+
 @mcp.tool()
 async def get_quote(symbol: str) -> str:
     """Get a real-time market quote for a stock symbol.
@@ -84,14 +98,19 @@ async def get_quote(symbol: str) -> str:
     """
     config = _get_config()
 
-    from skopaq.broker.client import INDstocksClient
-    from skopaq.broker.scrip_resolver import resolve_scrip_code
-    from skopaq.broker.token_manager import TokenManager
+    # Try Kite Connect first (no IP whitelist issues)
+    kite = _get_kite()
+    if kite:
+        q = await kite.get_quote(f"NSE:{symbol}", symbol=symbol)
+    else:
+        from skopaq.broker.client import INDstocksClient
+        from skopaq.broker.scrip_resolver import resolve_scrip_code
+        from skopaq.broker.token_manager import TokenManager
 
-    token_mgr = TokenManager()
-    async with INDstocksClient(config, token_mgr) as client:
-        scrip_code = await resolve_scrip_code(client, symbol)
-        q = await client.get_quote(scrip_code, symbol=symbol)
+        token_mgr = TokenManager()
+        async with INDstocksClient(config, token_mgr) as client:
+            scrip_code = await resolve_scrip_code(client, symbol)
+            q = await client.get_quote(scrip_code, symbol=symbol)
 
     return json.dumps({
         "symbol": q.symbol,
@@ -160,8 +179,12 @@ async def get_historical(
 @mcp.tool()
 async def get_positions() -> str:
     """Get open positions with P&L."""
-    router = _get_router()
-    positions = await router.get_positions()
+    kite = _get_kite()
+    if kite:
+        positions = await kite.get_positions()
+    else:
+        router = _get_router()
+        positions = await router.get_positions()
     return json.dumps([
         {
             "symbol": p.symbol,
@@ -178,8 +201,12 @@ async def get_positions() -> str:
 @mcp.tool()
 async def get_holdings() -> str:
     """Get delivery holdings."""
-    router = _get_router()
-    holdings = await router.get_holdings()
+    kite = _get_kite()
+    if kite:
+        holdings = await kite.get_holdings()
+    else:
+        router = _get_router()
+        holdings = await router.get_holdings()
     return json.dumps([
         {
             "symbol": h.symbol,
@@ -195,8 +222,12 @@ async def get_holdings() -> str:
 @mcp.tool()
 async def get_funds() -> str:
     """Get available cash, margin, and collateral."""
-    router = _get_router()
-    funds = await router.get_funds()
+    kite = _get_kite()
+    if kite:
+        funds = await kite.get_funds()
+    else:
+        router = _get_router()
+        funds = await router.get_funds()
     return json.dumps({
         "available_cash": funds.available_cash,
         "used_margin": funds.used_margin,
