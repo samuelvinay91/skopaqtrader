@@ -143,9 +143,18 @@ async def fetch_option_chain(
         q = quotes.get(token_key, {})
         ohlc = q.get("ohlc", {})
 
-        distance = ((inst["strike"] - spot_price) / spot_price) * 100
-        if inst["instrument_type"] == "PE":
+        # OTM distance: positive = out-of-the-money, negative = in-the-money
+        # CE is OTM when strike > spot; PE is OTM when strike < spot
+        if inst["instrument_type"] == "CE":
+            distance = ((inst["strike"] - spot_price) / spot_price) * 100
+            is_otm = inst["strike"] > spot_price
+        else:  # PE
             distance = ((spot_price - inst["strike"]) / spot_price) * 100
+            is_otm = inst["strike"] < spot_price
+
+        # Only include OTM strikes (ITM options shouldn't be sold naked)
+        if not is_otm:
+            continue
 
         contract = OptionContract(
             tradingsymbol=inst["tradingsymbol"],
@@ -161,7 +170,7 @@ async def fetch_option_chain(
             volume=q.get("volume", 0),
             oi=q.get("oi", 0),
             spot_price=spot_price,
-            distance_pct=abs(distance),
+            distance_pct=distance,  # Always positive for OTM
             days_to_expiry=max(days_to_expiry, 1),
             theta_estimate=q.get("last_price", 0) / max(days_to_expiry, 1),
         )
