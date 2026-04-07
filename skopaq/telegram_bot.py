@@ -26,7 +26,27 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import timezone
+
+
+def _clean_markdown(text: str) -> str:
+    """Strip markdown formatting for Telegram plain text.
+
+    Converts **bold** → BOLD, removes ``` code blocks,
+    and cleans up table pipes for readable plain text.
+    """
+    # **bold** → text (uppercase for emphasis)
+    text = re.sub(r"\*\*(.+?)\*\*", lambda m: m.group(1).upper(), text)
+    # *italic* → text
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
+    # ```code``` → code
+    text = re.sub(r"```\w*\n?", "", text)
+    # `inline code` → code
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    # Clean up excessive newlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 from telegram import Update
 from telegram.ext import (
@@ -357,12 +377,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if ai_text:
             session.add_ai_message(ai_text)
+            clean = _clean_markdown(ai_text)
             # Telegram has a 4096 char limit
-            if len(ai_text) > 4000:
-                for i in range(0, len(ai_text), 4000):
-                    await update.message.reply_text(ai_text[i:i + 4000])
+            if len(clean) > 4000:
+                for i in range(0, len(clean), 4000):
+                    await update.message.reply_text(clean[i:i + 4000])
             else:
-                await update.message.reply_text(ai_text)
+                await update.message.reply_text(clean)
         else:
             await update.message.reply_text("I processed your request but have no text response.")
 
@@ -447,10 +468,12 @@ async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
             text="Market open! Scanning NIFTY 50 for opportunities...",
         )
 
-    # Scan top stocks
+    # Scan top stocks using Kite directly
     try:
-        _ensure_infra()
-        from skopaq.mcp_server import get_quote
+        from skopaq.broker.kite_client import KiteClient
+
+        api_key = os.environ.get("SKOPAQ_KITE_API_KEY", "")
+        client = KiteClient(api_key=api_key, access_token=get_access_token())
 
         symbols = [
             "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
@@ -459,29 +482,35 @@ async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
         results = []
         for sym in symbols:
             try:
-                data = json.loads(await get_quote(sym))
-                results.append(data)
+                q = await client.get_quote(f"NSE:{sym}", symbol=sym)
+                results.append({
+                    "symbol": q.symbol,
+                    "ltp": q.ltp,
+                    "change_pct": q.change_pct,
+                    "volume": q.volume,
+                })
             except Exception:
                 pass
 
         # Sort by change% (top movers)
         results.sort(key=lambda x: abs(x.get("change_pct", 0)), reverse=True)
 
-        lines = ["Market Scan (9:25 IST)\n"]
+        lines = ["📊 Market Scan (09:25 IST)\n"]
         for r in results[:8]:
-            emoji = "+" if r["change_pct"] >= 0 else ""
+            emoji = "🟢" if r["change_pct"] >= 0 else "🔴"
             lines.append(
-                f"{'  ' if r['change_pct'] >= 0 else ''}{r['symbol']}: "
-                f"Rs {r['ltp']:,.2f} ({emoji}{r['change_pct']:.2f}%) "
-                f"Vol: {r['volume']:,}"
+                f"{emoji} {r['symbol']}: Rs {r['ltp']:,.2f} "
+                f"({r['change_pct']:+.2f}%) Vol: {r['volume']:,}"
             )
 
         # Identify top pick
         gainers = [r for r in results if r["change_pct"] > 0.5]
         if gainers:
             top = gainers[0]
-            lines.append(f"\nTop pick: {top['symbol']} (+{top['change_pct']:.2f}%)")
-            lines.append("Reply 'trade SYMBOL' to execute, or 'analyze SYMBOL' for deep analysis.")
+            lines.append(f"\n💡 Top pick: {top['symbol']} (+{top['change_pct']:.2f}%)")
+
+        lines.append("\nReply 'analyze SYMBOL' for deep analysis")
+        lines.append("Reply 'trade SYMBOL' to execute")
 
         scan_msg = "\n".join(lines)
         for chat_id in list(alert_chat_ids):
