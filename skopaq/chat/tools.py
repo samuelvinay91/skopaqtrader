@@ -325,11 +325,23 @@ async def get_portfolio() -> str:
     Returns all open positions with P&L, delivery holdings, and cash balance.
     """
     infra = _get_infra()
+    config = infra.config
 
     try:
-        positions = await infra.order_router.get_positions()
-        holdings = await infra.order_router.get_holdings()
-        funds = await infra.order_router.get_funds()
+        # For live mode, create a fresh client with proper async context
+        if config.trading_mode == "live":
+            from skopaq.broker.client import INDstocksClient
+            from skopaq.broker.token_manager import TokenManager
+
+            token_mgr = TokenManager()
+            async with INDstocksClient(config, token_mgr) as client:
+                positions = await client.get_positions()
+                holdings = await client.get_holdings()
+                funds = await client.get_funds()
+        else:
+            positions = await infra.order_router.get_positions()
+            holdings = await infra.order_router.get_holdings()
+            funds = await infra.order_router.get_funds()
 
         lines = [f"**Portfolio** ({infra.order_router.mode} mode)"]
 
@@ -422,8 +434,31 @@ async def get_quote(symbol: str) -> str:
 async def get_orders() -> str:
     """Get today's orders with status, symbol, quantity, and price."""
     infra = _get_infra()
+    config = infra.config
 
     try:
+        if config.trading_mode == "live":
+            from skopaq.broker.client import INDstocksClient
+            from skopaq.broker.token_manager import TokenManager
+
+            token_mgr = TokenManager()
+            async with INDstocksClient(config, token_mgr) as client:
+                order_book = await client.get_order_book()
+                if not order_book:
+                    return "No orders today."
+                lines = [f"**Today's Orders** ({len(order_book)})"]
+                for o in order_book:
+                    if isinstance(o, dict):
+                        lines.append(
+                            f"- {o.get('id','?')}: {o.get('status','?')} "
+                            f"{o.get('txn_type','')} {o.get('name','')} "
+                            f"qty={o.get('traded_qty',0)}/{o.get('requested_qty',0)} "
+                            f"@ {o.get('traded_price','0')}"
+                        )
+                    else:
+                        lines.append(f"- {o.order_id}: {o.status} — {o.message}")
+                return "\n".join(lines)
+
         orders = await infra.order_router.get_orders()
         if not orders:
             return "No orders today."

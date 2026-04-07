@@ -140,5 +140,8 @@ class SkopaqConfig(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = ""              # Auto-detect if empty
 
+    # ── Telegram Bot ────────────────────────────────────────────────────────
+    telegram_bot_token: SecretStr = SecretStr("")
+
     # ── Logging ─────────────────────────────────────────────────────────────
     log_level: str = "INFO"
