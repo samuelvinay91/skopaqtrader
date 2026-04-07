@@ -122,6 +122,22 @@ def get_access_token() -> str:
     except Exception:
         pass
 
+    # Try fetching from the API server (for Telegram bot running on separate machine)
+    try:
+        import httpx
+
+        resp = httpx.get("https://skopaq-trader.fly.dev/api/kite/token", timeout=5)
+        if resp.status_code == 200:
+            token = resp.json().get("access_token", "")
+            if token:
+                _access_token = token
+                # Persist locally so we don't keep fetching
+                set_access_token(token)
+                logger.info("Kite token fetched from API server")
+                return token
+    except Exception:
+        pass
+
     return ""
 
 

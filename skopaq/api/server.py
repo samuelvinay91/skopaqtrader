@@ -93,6 +93,21 @@ async def kite_status():
     }
 
 
+@app.get("/api/kite/token")
+async def kite_token():
+    """Return the Kite access token (for internal service-to-service use).
+
+    The Telegram bot fetches this to share the Kite session established
+    via the API app's OAuth login flow.
+    """
+    from skopaq.broker.kite_client import get_access_token
+
+    token = get_access_token()
+    if not token:
+        raise HTTPException(404, "No Kite token available. Login first.")
+    return {"access_token": token}
+
+
 @app.post("/api/kite/postback")
 async def kite_postback(request: Request):
     """Receive real-time order updates from Zerodha.

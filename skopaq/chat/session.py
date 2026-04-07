@@ -89,14 +89,22 @@ def build_infrastructure(config: SkopaqConfig) -> Infrastructure:
             else SAFETY_RULES
         )
 
-    # Wire live broker when in live mode
+    # Wire live broker when in live mode (gracefully skip if unavailable)
     live_client = None
     if config.trading_mode == "live":
-        from skopaq.broker.client import INDstocksClient
-        from skopaq.broker.token_manager import TokenManager
+        try:
+            from skopaq.broker.client import INDstocksClient
+            from skopaq.broker.token_manager import TokenManager
 
-        token_mgr = TokenManager()
-        live_client = INDstocksClient(config, token_mgr)
+            token_mgr = TokenManager()
+            # Only create if token is available
+            health = token_mgr.get_health()
+            if health.valid:
+                live_client = INDstocksClient(config, token_mgr)
+            else:
+                logger.info("INDstocks token unavailable — using Kite/paper fallback")
+        except Exception:
+            logger.info("INDstocks client init skipped — using Kite/paper fallback")
 
     router = OrderRouter(config, paper, live_client=live_client)
     safety = SafetyChecker(
