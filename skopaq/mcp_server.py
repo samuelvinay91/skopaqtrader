@@ -668,6 +668,169 @@ async def suggest_option_trade(
         return json.dumps({"error": str(exc)})
 
 
+# ── GTT (Good Till Triggered) Orders ─────────────────────────────────────────
+
+
+@mcp.tool()
+async def place_gtt_order(
+    symbol: str,
+    action: str = "BUY",
+    trigger_price: float = 0,
+    target_price: float = 0,
+    stop_loss_price: float = 0,
+    quantity: int = 1,
+) -> str:
+    """Place a GTT order that triggers automatically when the price is hit.
+
+    For BUY: single trigger — executes when price drops to trigger_price (buy at support).
+    For SELL with target + stop_loss: OCO order — whichever hits first executes.
+
+    GTT orders live on Zerodha's server — zero monitoring needed.
+
+    Args:
+        symbol: Stock symbol (e.g., RELIANCE).
+        action: BUY or SELL.
+        trigger_price: Price at which to trigger (for single-trigger BUY).
+        target_price: Upper sell trigger (for OCO SELL).
+        stop_loss_price: Lower sell trigger (for OCO SELL).
+        quantity: Number of shares.
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.options.gtt import place_gtt_buy, place_gtt_oco_sell
+
+        if action.upper() == "BUY" and trigger_price > 0:
+            result = await place_gtt_buy(
+                kite, symbol, trigger_price, trigger_price, quantity,
+            )
+            return json.dumps({
+                "success": True,
+                "type": "GTT_BUY",
+                "symbol": symbol,
+                "trigger": trigger_price,
+                "quantity": quantity,
+                "gtt_id": result.get("trigger_id", ""),
+                "message": f"GTT BUY set: buy {quantity}x {symbol} when price hits Rs {trigger_price}",
+            })
+
+        elif action.upper() == "SELL" and target_price > 0 and stop_loss_price > 0:
+            result = await place_gtt_oco_sell(
+                kite, symbol, target_price, stop_loss_price, quantity,
+            )
+            return json.dumps({
+                "success": True,
+                "type": "GTT_OCO_SELL",
+                "symbol": symbol,
+                "target": target_price,
+                "stop_loss": stop_loss_price,
+                "quantity": quantity,
+                "gtt_id": result.get("trigger_id", ""),
+                "message": (
+                    f"GTT OCO SELL set: sell {quantity}x {symbol} at "
+                    f"Rs {target_price} (target) or Rs {stop_loss_price} (stop-loss)"
+                ),
+            })
+        else:
+            return json.dumps({
+                "error": "For BUY: provide trigger_price. For SELL: provide target_price + stop_loss_price.",
+            })
+
+    except Exception as exc:
+        logger.exception("GTT order failed")
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def list_gtt_orders() -> str:
+    """List all active GTT (Good Till Triggered) orders."""
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.options.gtt import list_gtts, format_gtt_for_telegram
+
+        gtts = await list_gtts(kite)
+        if not gtts:
+            return "No active GTT orders."
+
+        lines = [f"Active GTT Orders ({len(gtts)})\n"]
+        for g in gtts:
+            lines.append(format_gtt_for_telegram(g))
+            lines.append("")
+
+        return "\n".join(lines)
+
+    except Exception as exc:
+        logger.exception("List GTT failed")
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def setup_swing_trade(
+    symbol: str,
+    entry_price: float,
+    target_price: float,
+    stop_loss_price: float,
+    quantity: int = 1,
+) -> str:
+    """Set up a complete CNC swing trade with automated exit via GTT.
+
+    Places a GTT BUY at the entry price, then after fill, sets up a
+    GTT OCO SELL with target + stop-loss. Fully automated — zero monitoring.
+
+    Args:
+        symbol: Stock symbol.
+        entry_price: Buy trigger price (support level).
+        target_price: Sell target price (resistance level).
+        stop_loss_price: Stop-loss price.
+        quantity: Number of shares.
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.options.gtt import place_gtt_buy
+
+        # Step 1: Place GTT BUY at entry
+        buy_result = await place_gtt_buy(
+            kite, symbol, entry_price, entry_price, quantity,
+        )
+
+        risk = entry_price - stop_loss_price
+        reward = target_price - entry_price
+        rr = reward / risk if risk > 0 else 0
+
+        return json.dumps({
+            "success": True,
+            "type": "SWING_TRADE_SETUP",
+            "symbol": symbol,
+            "entry": entry_price,
+            "target": target_price,
+            "stop_loss": stop_loss_price,
+            "quantity": quantity,
+            "risk_reward": f"1:{rr:.1f}",
+            "buy_gtt_id": buy_result.get("trigger_id", ""),
+            "message": (
+                f"Swing trade set for {symbol}:\n"
+                f"  BUY trigger: Rs {entry_price:,.2f} (GTT active)\n"
+                f"  Target: Rs {target_price:,.2f} (+{((target_price-entry_price)/entry_price)*100:.1f}%)\n"
+                f"  Stop Loss: Rs {stop_loss_price:,.2f} (-{((entry_price-stop_loss_price)/entry_price)*100:.1f}%)\n"
+                f"  R:R = 1:{rr:.1f}\n\n"
+                f"After BUY fills, set OCO SELL via: "
+                f"place_gtt_order SELL {symbol} target={target_price} stop_loss={stop_loss_price}"
+            ),
+        })
+
+    except Exception as exc:
+        logger.exception("Swing trade setup failed")
+        return json.dumps({"error": str(exc)})
+
+
 # ── Data Gathering Tools (for Claude-native analysis) ────────────────────────
 # These tools fetch raw data that the multi-agent pipeline analysts need.
 # Claude Code reasons with this data directly — no separate LLM calls.

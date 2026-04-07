@@ -35,6 +35,9 @@ def test_mcp_server_has_all_tools():
         "save_trade_reflection",
         "get_option_chain",
         "suggest_option_trade",
+        "place_gtt_order",
+        "list_gtt_orders",
+        "setup_swing_trade",
     }
     assert tool_names == expected
 
