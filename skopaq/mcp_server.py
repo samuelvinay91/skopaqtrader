@@ -26,6 +26,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from mcp.server import FastMCP
 
 logger = logging.getLogger(__name__)
@@ -1470,6 +1472,159 @@ async def save_trade_reflection(
     except Exception as e:
         logger.warning("Reflection save failed: %s", e)
         return json.dumps({"saved": False, "error": str(e)})
+
+
+# ── Strategy Refinement ──────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def backtest_strategy(
+    symbol: str,
+    days: int = 365,
+    stop_loss_pct: float = 3.0,
+    target_pct: float = 6.0,
+) -> str:
+    """Backtest the AI trading strategy on historical data.
+
+    Runs signals against OHLCV history with realistic slippage and commission.
+    Returns Sharpe, Sortino, Calmar, max drawdown, win rate, and profit factor.
+
+    Args:
+        symbol: Stock symbol (e.g., RELIANCE, TCS).
+        days: Days of history to backtest (default 365).
+        stop_loss_pct: Stop-loss percentage (default 3%).
+        target_pct: Target percentage (default 6%).
+    """
+    import asyncio
+
+    try:
+        from tradingagents.dataflows.interface import route_to_vendor
+        from skopaq.backtest.engine import BacktestConfig, run_backtest, format_backtest_report
+
+        _setup_dataflow_config()
+
+        # Fetch historical data
+        end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start_date = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
+
+        ohlcv_text = await asyncio.to_thread(
+            route_to_vendor, "get_stock_data", symbol, start_date, end_date
+        )
+
+        # Parse CSV to DataFrame
+        import io
+        lines = [l for l in ohlcv_text.strip().split("\n") if not l.startswith("#")]
+        df = pd.read_csv(io.StringIO("\n".join(lines)))
+
+        if len(df) < 20:
+            return f"Insufficient data for {symbol} ({len(df)} bars)"
+
+        # Generate RSI mean-reversion signals
+        # Buy when oversold (RSI < 35), sell when overbought (RSI > 65)
+        df["RSI"] = _compute_rsi(df["Close"], 14)
+        df["SMA_20"] = df["Close"].rolling(20).mean()
+
+        signals = pd.DataFrame({
+            "date": df["Date"],
+            "signal": 0,
+            "confidence": 50,
+        })
+
+        for i in range(20, len(df)):
+            rsi = df.iloc[i]["RSI"]
+            if pd.isna(rsi):
+                continue
+            if rsi < 35:
+                signals.iloc[i, signals.columns.get_loc("signal")] = 1
+                signals.iloc[i, signals.columns.get_loc("confidence")] = int(70 + (35 - rsi))
+            elif rsi > 65:
+                signals.iloc[i, signals.columns.get_loc("signal")] = -1
+
+        config = BacktestConfig(
+            stop_loss_pct=stop_loss_pct / 100,
+            target_pct=target_pct / 100,
+        )
+
+        result = run_backtest(signals, df, config, symbol)
+        return format_backtest_report(result)
+
+    except Exception as exc:
+        logger.exception("Backtest failed")
+        return f"Backtest error: {exc}"
+
+
+@mcp.tool()
+async def run_monte_carlo_test(
+    symbol: str,
+    days: int = 365,
+    simulations: int = 1000,
+) -> str:
+    """Run Monte Carlo simulation on a strategy's historical trades.
+
+    Shuffles trade order 1000+ times to test if the edge is real or
+    just luck from sequence. Shows worst-case drawdown and probability of ruin.
+
+    Args:
+        symbol: Stock symbol.
+        days: Days of history.
+        simulations: Number of scenarios (default 1000).
+    """
+    try:
+        # First run backtest to get trades
+        import asyncio, io
+        from tradingagents.dataflows.interface import route_to_vendor
+        from skopaq.backtest.engine import BacktestConfig, run_backtest
+        from skopaq.backtest.monte_carlo import run_monte_carlo, format_monte_carlo_report
+
+        _setup_dataflow_config()
+
+        end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start_date = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
+
+        ohlcv_text = await asyncio.to_thread(
+            route_to_vendor, "get_stock_data", symbol, start_date, end_date
+        )
+
+        lines = [l for l in ohlcv_text.strip().split("\n") if not l.startswith("#")]
+        df = pd.read_csv(io.StringIO("\n".join(lines)))
+
+        if len(df) < 20:
+            return f"Insufficient data for {symbol}"
+
+        # Generate signals + run backtest
+        df["SMA_20"] = df["Close"].rolling(20).mean()
+        df["RSI"] = _compute_rsi(df["Close"], 14)
+
+        signals = pd.DataFrame({"date": df["Date"], "signal": 0, "confidence": 50})
+        for i in range(20, len(df)):
+            if df.iloc[i]["RSI"] < 35:
+                signals.iloc[i, signals.columns.get_loc("signal")] = 1
+            elif df.iloc[i]["RSI"] > 65:
+                signals.iloc[i, signals.columns.get_loc("signal")] = -1
+
+        bt_result = run_backtest(signals, df, BacktestConfig(), symbol)
+
+        if len(bt_result.trades) < 5:
+            return f"Too few trades ({len(bt_result.trades)}) for Monte Carlo"
+
+        # Run Monte Carlo on trade P&Ls
+        trade_pnls = [t.pnl for t in bt_result.trades]
+        mc_result = run_monte_carlo(trade_pnls, n_simulations=simulations)
+
+        return format_monte_carlo_report(mc_result)
+
+    except Exception as exc:
+        logger.exception("Monte Carlo failed")
+        return f"Monte Carlo error: {exc}"
+
+
+def _compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
+    """Compute RSI indicator."""
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
 
 # ── Entry Point ──────────────────────────────────────────────────────────────

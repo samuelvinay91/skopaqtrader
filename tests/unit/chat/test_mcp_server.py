@@ -14,7 +14,7 @@ def test_mcp_server_has_all_tools():
     from skopaq.mcp_server import mcp
 
     tool_names = {t.name for t in mcp._tool_manager._tools.values()}
-    assert len(tool_names) == 31  # Total tool count
+    assert len(tool_names) == 33  # Total tool count
 
     # Verify key tools exist by category
     assert "get_quote" in tool_names  # Market data
