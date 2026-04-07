@@ -303,33 +303,57 @@ class LangCacheSemanticCache(BaseCache):
 # ---------------------------------------------------------------------------
 
 def _make_in_memory_cache() -> BaseCache:
-    """Create LangChain's built-in InMemoryCache as a fallback.
-
-    Provides exact-match caching within the current process — no external
-    dependencies.  Useful for avoiding redundant LLM calls within a single
-    session (e.g. agent retries, repeated slash commands).
-    """
+    """Create LangChain's built-in InMemoryCache as a fallback."""
     from langchain_core.caches import InMemoryCache
 
     logger.info("Using in-memory LLM cache (exact-match, session-scoped)")
     return InMemoryCache()
 
 
+def _make_redis_cache() -> Optional[BaseCache]:
+    """Create a Redis-backed LangChain cache using Fly.io Upstash Redis.
+
+    Uses REDIS_URL or SKOPAQ_REDIS_URL env var. Provides persistent
+    exact-match caching across restarts — better than InMemoryCache.
+    """
+    import os
+
+    redis_url = os.environ.get("REDIS_URL", "") or os.environ.get("SKOPAQ_REDIS_URL", "")
+    if not redis_url:
+        return None
+
+    try:
+        from langchain_community.cache import RedisCache
+        import redis
+
+        client = redis.from_url(redis_url, socket_timeout=2, socket_connect_timeout=2)
+        # Quick connectivity test (2s timeout — fast on Fly.io, fails locally)
+        client.ping()
+        logger.info("Redis cache connected: %s", redis_url.split("@")[-1] if "@" in redis_url else redis_url[:30])
+        return RedisCache(redis_=client)
+    except ImportError:
+        logger.debug("langchain-community or redis not installed — skipping Redis cache")
+        return None
+    except Exception as exc:
+        logger.debug("Redis cache failed: %s", exc)
+        return None
+
+
 def init_langcache(config: Any) -> Optional[BaseCache]:
     """Create the best available LLM cache from SkopaqConfig.
 
     Priority:
-    1. **LangCache semantic cache** (Upstash Redis) — if enabled and
-       credentials are present.
-    2. **In-memory cache** — always available, zero config.  Provides
-       exact-match caching within the current process.
+    1. **LangCache semantic cache** (external Upstash) — if enabled + credentials
+    2. **Redis cache** (Fly.io Upstash) — if REDIS_URL is set
+    3. **In-memory cache** — always available, zero config
 
-    Returns ``None`` only when ``langcache_enabled`` is explicitly
-    ``False`` **and** the caller doesn't want any cache.
+    Returns a cache instance (never None).
     """
     if not getattr(config, "langcache_enabled", False):
-        # Even when the semantic cache is disabled, provide in-memory
-        # caching so repeated identical prompts don't cost extra.
+        # Try Fly.io Redis first, then fall back to in-memory
+        redis_cache = _make_redis_cache()
+        if redis_cache:
+            return redis_cache
         return _make_in_memory_cache()
 
     api_key = ""
@@ -360,8 +384,8 @@ def init_langcache(config: Any) -> Optional[BaseCache]:
         )
         return cache
     except Exception:
-        logger.warning(
-            "Failed to initialise LangCache — falling back to in-memory cache",
-            exc_info=True,
-        )
+        logger.warning("Failed to initialise LangCache — trying Redis fallback")
+        redis_cache = _make_redis_cache()
+        if redis_cache:
+            return redis_cache
         return _make_in_memory_cache()
