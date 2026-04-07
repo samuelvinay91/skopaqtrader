@@ -290,6 +290,19 @@ class KiteClient:
                 trigger_price=order.trigger_price if order.trigger_price else None,
             )
             logger.info("Kite order placed: %s", order_id)
+
+            # Auto-notify via Telegram
+            try:
+                from skopaq.notifications import notify_trade_event
+
+                await notify_trade_event(
+                    order.side.value, order.symbol,
+                    order.price or 0, int(order.quantity),
+                    "PENDING", order_id=str(order_id),
+                )
+            except Exception:
+                pass
+
             return OrderResponse(
                 order_id=str(order_id),
                 status="PENDING",

@@ -83,7 +83,12 @@ def _ensure_infra():
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Welcome message and register for alerts."""
-    alert_chat_ids.add(update.message.chat.id)
+    chat_id = update.message.chat.id
+    alert_chat_ids.add(chat_id)
+
+    # Register with centralized notification system
+    from skopaq.notifications import register_chat
+    register_chat(chat_id)
     await update.message.reply_text(
         "Welcome to SkopaqTrader! Your AI trading assistant.\n\n"
         "Commands:\n"

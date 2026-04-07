@@ -90,6 +90,15 @@ async def place_gtt_buy(
     )
 
     logger.info("GTT BUY placed: %s trigger=%s qty=%s id=%s", symbol, buy_trigger, quantity, result)
+
+    # Auto-notify via Telegram
+    from skopaq.notifications import notify_gtt_event
+
+    await notify_gtt_event(
+        "PLACED", symbol, buy_trigger,
+        trigger_id=result.get("trigger_id", 0), quantity=quantity,
+    )
+
     return result
 
 
@@ -149,6 +158,16 @@ async def place_gtt_oco_sell(
         "GTT OCO SELL placed: %s target=%s stop=%s qty=%s id=%s",
         symbol, target_price, stop_loss_price, quantity, result,
     )
+
+    # Auto-notify via Telegram
+    from skopaq.notifications import notify_gtt_event
+
+    await notify_gtt_event(
+        "PLACED", symbol, stop_loss_price,
+        target_price=target_price, stop_loss_price=stop_loss_price,
+        trigger_id=result.get("trigger_id", 0), quantity=quantity,
+    )
+
     return result
 
 

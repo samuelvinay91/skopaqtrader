@@ -134,28 +134,20 @@ async def kite_postback(request: Request):
         txn, symbol, order_id, qty, price, status,
     )
 
-    # Send Telegram alert if bot token is available
+    # Auto-notify via centralized notification system
     try:
-        import os
-        tg_token = os.environ.get("SKOPAQ_TELEGRAM_BOT_TOKEN", "")
-        if tg_token:
-            from telegram import Bot
-            from skopaq.broker.kite_client import get_access_token
+        from skopaq.notifications import notify_trade_event
 
-            bot = Bot(tg_token)
-            # Send to known chat IDs (stored from telegram bot sessions)
-            alert = (
-                f"Order Update\n\n"
-                f"{txn} {symbol}\n"
-                f"Status: {status}\n"
-                f"Qty: {qty} @ Rs {price}\n"
-                f"Order: {order_id}"
-            )
-            # We'll broadcast to the last known chat_id
-            # For now just log — the Telegram bot picks it up via polling
-            logger.info("Postback alert: %s", alert)
+        await notify_trade_event(
+            action=txn,
+            symbol=symbol,
+            price=float(price) if price else 0,
+            quantity=int(qty) if qty else 0,
+            status=status,
+            order_id=order_id,
+        )
     except Exception:
-        pass
+        logger.warning("Postback notification failed", exc_info=True)
 
     return {"status": "ok"}
 
