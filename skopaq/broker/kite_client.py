@@ -41,20 +41,88 @@ from skopaq.broker.models import (
 
 logger = logging.getLogger(__name__)
 
-# Module-level access token (set after OAuth login)
+# Module-level access token cache
 _access_token: str = ""
+
+# Persistent storage: /data on Fly.io (volume mount), /tmp locally
+import os as _os
+_DATA_DIR = "/data" if _os.path.isdir("/data") else "/tmp"
+_TOKEN_FILE = _os.path.join(_DATA_DIR, "skopaq_kite_token.json")
 
 
 def set_access_token(token: str) -> None:
-    """Set the Kite access token after OAuth login."""
+    """Set the Kite access token and persist to file + env var."""
     global _access_token
     _access_token = token
-    logger.info("Kite access token set")
+
+    # Persist to file so it survives module reloads
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        with open(_TOKEN_FILE, "w") as f:
+            json.dump({
+                "access_token": token,
+                "set_at": datetime.now(timezone.utc).isoformat(),
+            }, f)
+        logger.info("Kite access token set and persisted")
+    except Exception as exc:
+        logger.warning("Could not persist Kite token: %s", exc)
+
+    # Also set as env var for subprocess access
+    import os
+    os.environ["SKOPAQ_KITE_ACCESS_TOKEN"] = token
 
 
 def get_access_token() -> str:
-    """Get the current access token."""
-    return _access_token
+    """Get the current access token.
+
+    Priority:
+    1. Module-level cache (fastest)
+    2. Persisted file (/tmp/skopaq_kite_token.json)
+    3. SKOPAQ_KITE_ACCESS_TOKEN env var
+    4. SkopaqConfig (from .env)
+    """
+    global _access_token
+    if _access_token:
+        return _access_token
+
+    # Try persisted file
+    import json
+
+    try:
+        with open(_TOKEN_FILE) as f:
+            data = json.load(f)
+            token = data.get("access_token", "")
+            if token:
+                _access_token = token
+                logger.info("Kite token restored from file")
+                return token
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Try env var
+    import os
+
+    env_token = os.environ.get("SKOPAQ_KITE_ACCESS_TOKEN", "")
+    if env_token:
+        _access_token = env_token
+        logger.info("Kite token restored from env var")
+        return env_token
+
+    # Try config
+    try:
+        from skopaq.config import SkopaqConfig
+
+        config = SkopaqConfig()
+        cfg_token = config.kite_access_token.get_secret_value()
+        if cfg_token:
+            _access_token = cfg_token
+            return cfg_token
+    except Exception:
+        pass
+
+    return ""
 
 
 class KiteClient:

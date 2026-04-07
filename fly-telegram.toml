@@ -11,6 +11,10 @@ primary_region = 'bom'
 [processes]
   app = "telegram"
 
+[mounts]
+  source = "skopaq_data"
+  destination = "/data"
+
 [[vm]]
   memory = '512mb'
   cpu_kind = 'shared'
