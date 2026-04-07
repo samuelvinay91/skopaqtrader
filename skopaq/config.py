@@ -149,5 +149,8 @@ class SkopaqConfig(BaseSettings):
     # ── Telegram Bot ────────────────────────────────────────────────────────
     telegram_bot_token: SecretStr = SecretStr("")
 
+    # ── Database (Fly.io Postgres) ──────────────────────────────────────────
+    database_url: str = ""  # Set by Fly.io attachment or manually
+
     # ── Logging ─────────────────────────────────────────────────────────────
     log_level: str = "INFO"
