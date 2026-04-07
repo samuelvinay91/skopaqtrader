@@ -140,6 +140,12 @@ class SkopaqConfig(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = ""              # Auto-detect if empty
 
+    # ── Kite Connect (Zerodha) ───────────────────────────────────────────────
+    kite_api_key: str = ""
+    kite_api_secret: SecretStr = SecretStr("")
+    kite_client_id: str = ""
+    kite_access_token: SecretStr = SecretStr("")  # Set after OAuth login
+
     # ── Telegram Bot ────────────────────────────────────────────────────────
     telegram_bot_token: SecretStr = SecretStr("")
 

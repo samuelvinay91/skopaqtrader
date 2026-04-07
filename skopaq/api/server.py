@@ -39,6 +39,60 @@ from skopaq.chat.bridge import router as chat_router
 app.include_router(chat_router)
 
 
+# ── Kite Connect OAuth ───────────────────────────────────────────────────────
+
+@app.get("/api/kite/login")
+async def kite_login():
+    """Redirect to Zerodha Kite login page."""
+    from skopaq.broker.kite_client import KiteClient
+
+    config = SkopaqConfig()
+    if not config.kite_api_key:
+        raise HTTPException(400, "SKOPAQ_KITE_API_KEY not configured")
+
+    client = KiteClient(api_key=config.kite_api_key)
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(client.login_url)
+
+
+@app.get("/api/kite/callback")
+async def kite_callback(request_token: str = "", status: str = ""):
+    """Handle Kite OAuth callback — exchange request_token for access_token."""
+    from skopaq.broker.kite_client import KiteClient, set_access_token
+
+    config = SkopaqConfig()
+    if not request_token or status != "success":
+        raise HTTPException(400, f"Login failed: status={status}")
+
+    client = KiteClient(
+        api_key=config.kite_api_key,
+        api_secret=config.kite_api_secret.get_secret_value(),
+    )
+    try:
+        session = client.generate_session(request_token)
+        return {
+            "status": "success",
+            "user_id": session.get("user_id"),
+            "access_token_set": True,
+            "message": "Kite login successful. Bot is now connected to Zerodha.",
+        }
+    except Exception as exc:
+        raise HTTPException(500, f"Session generation failed: {exc}")
+
+
+@app.get("/api/kite/status")
+async def kite_status():
+    """Check if Kite access token is set."""
+    from skopaq.broker.kite_client import get_access_token
+
+    token = get_access_token()
+    return {
+        "connected": bool(token),
+        "token_length": len(token) if token else 0,
+    }
+
+
 @app.get("/health")
 async def health() -> dict:
     """Health check endpoint (used by Railway)."""
