@@ -615,7 +615,58 @@ python -m pytest tests/integration/ -v -m integration
 python -m pytest --cov=skopaq --cov=tradingagents -v
 ```
 
-## Deployment
+## Docker
+
+The fastest way to get started. One image, all services.
+
+```bash
+# Pull and run (when published to Docker Hub)
+docker pull skopaqtrader/skopaqtrader:latest
+
+# Or build locally
+git clone https://github.com/samuelvinay91/skopaqtrader.git
+cd skopaqtrader
+docker build -t skopaqtrader/skopaqtrader .
+```
+
+### Quick Start with Docker
+
+```bash
+# 1. Configure
+cp .env.example .env
+# Edit .env with your API keys (at minimum SKOPAQ_GOOGLE_API_KEY)
+
+# 2. Run any service
+docker run -it --env-file .env skopaqtrader/skopaqtrader chat        # AI chatbot
+docker run -d --env-file .env skopaqtrader/skopaqtrader telegram     # Telegram bot
+docker run -d --env-file .env -p 8000:8000 skopaqtrader/skopaqtrader api  # FastAPI
+docker run --rm --env-file .env skopaqtrader/skopaqtrader scan       # Market scan
+docker run --rm --env-file .env skopaqtrader/skopaqtrader status     # Health check
+```
+
+### Docker Compose (recommended)
+
+```bash
+cp .env.example .env   # Add your API keys
+docker compose up -d   # Starts API + Telegram bot
+```
+
+### Available Services
+
+| Service | Command | Description |
+|---------|---------|-------------|
+| `api` | Default | FastAPI backend (port 8000) |
+| `chat` | Interactive | Claude Code-style AI chatbot |
+| `telegram` | Background | Telegram bot (@Skopaq_bot) |
+| `mcp` | stdio | MCP server for Claude Code |
+| `daemon` | One-shot | Paper trading session |
+| `daemon-live` | One-shot | LIVE trading session |
+| `monitor` | Background | Position monitor |
+| `scan` | One-shot | Market scanner |
+| `status` | One-shot | System health check |
+| `shell` | Interactive | Bash shell for debugging |
+
+## Cloud Deployment
 
 > [!WARNING]
 > Deploying autonomous trading to a cloud server means orders will execute **without human supervision**. Start with paper mode, set conservative limits, and monitor logs daily. You are fully responsible for any trades placed by the daemon.
@@ -628,8 +679,6 @@ python -m pytest --cov=skopaq --cov=tradingagents -v
 | **Supabase** | `supabase/` | PostgreSQL + Auth + agent memory |
 | **Upstash** | — | Serverless Redis (semantic LLM cache) |
 | **Cloudflare Tunnel** | — | Static IP for INDstocks API whitelist |
-
-See [`docker/Dockerfile`](docker/Dockerfile) for the shared container image used by both Railway services.
 
 ## Upstream Modifications
 

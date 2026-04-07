@@ -1,0 +1,71 @@
+# SkopaqTrader Docker Compose
+#
+# Quick start:
+#   cp .env.example .env    # Add your API keys
+#   docker compose up -d    # Start API + Telegram bot
+#
+# Individual services:
+#   docker compose up api           # FastAPI only
+#   docker compose up telegram      # Telegram bot only
+#   docker compose run --rm chat    # Interactive chatbot
+#   docker compose run --rm scan    # One-shot market scan
+
+services:
+  # ── FastAPI Backend ──────────────────────────────────────────
+  api:
+    build: .
+    command: api
+    ports:
+      - "8000:8000"
+    env_file: .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Telegram Bot ─────────────────────────────────────────────
+  telegram:
+    build: .
+    command: telegram
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ── Interactive Chat (run interactively, not as daemon) ──────
+  chat:
+    build: .
+    command: chat
+    env_file: .env
+    stdin_open: true
+    tty: true
+    profiles:
+      - interactive
+
+  # ── Autonomous Daemon (paper mode) ──────────────────────────
+  daemon:
+    build: .
+    command: daemon
+    env_file: .env
+    profiles:
+      - trading
+
+  # ── Market Scanner (one-shot) ───────────────────────────────
+  scan:
+    build: .
+    command: scan
+    env_file: .env
+    profiles:
+      - tools
+
+  # ── MCP Server (for Claude Code / external agents) ──────────
+  mcp:
+    build: .
+    command: mcp
+    env_file: .env
+    stdin_open: true
+    profiles:
+      - mcp

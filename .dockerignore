@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.eggs
+*.egg-info
+
+# Environment (secrets — pass via --env-file)
+.env
+.env.local
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# Claude Code local files
+.claude/plans
+.claude/settings.local.json
+.claude/launch.json
+
+# Results and cache
+results/
+.cache/
+eval_results/
+logs/
+
+# Frontend (separate build)
+frontend/node_modules
+frontend/.next
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Simulation scripts
+sim_portfolio*.py
