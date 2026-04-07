@@ -11,7 +11,13 @@ Commands:
     /status         — System health check
     /analyze SYMBOL — Quick Claude-style analysis (using data tools)
     /pnl            — Current P&L on open positions
+    /login          — Send Kite Connect login link
     /help           — List commands
+
+Scheduled jobs:
+    09:00 IST — Pre-market Kite login reminder
+    09:25 IST — Auto market scan (top movers)
+    15:35 IST — EOD P&L summary
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import timezone
 
 from telegram import Update
 from telegram.ext import (
@@ -36,6 +43,7 @@ logger = logging.getLogger(__name__)
 # ── Lazy infrastructure ──────────────────────────────────────────────────────
 
 _infra_ready = False
+alert_chat_ids: set[int] = set()  # Chat IDs registered for alerts/notifications
 
 
 def _ensure_infra():
@@ -54,17 +62,22 @@ def _ensure_infra():
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Welcome message."""
+    """Welcome message and register for alerts."""
+    alert_chat_ids.add(update.message.chat.id)
     await update.message.reply_text(
-        "Welcome to *SkopaqTrader* \\! Your AI trading assistant\\.\n\n"
+        "Welcome to SkopaqTrader! Your AI trading assistant.\n\n"
         "Commands:\n"
-        "/quote SYMBOL \\- Live stock quote\n"
-        "/portfolio \\- Positions \\& P\\&L\n"
-        "/status \\- System health\n"
-        "/pnl \\- Open position P\\&L\n"
-        "/help \\- All commands\n\n"
-        "Or just type a stock symbol to get a quick quote\\.",
-        parse_mode="MarkdownV2",
+        "/quote SYMBOL - Live stock quote\n"
+        "/portfolio - Positions & P&L\n"
+        "/status - System health\n"
+        "/pnl - Open position P&L\n"
+        "/login - Connect to Zerodha\n"
+        "/help - All commands\n\n"
+        "Scheduled (auto):\n"
+        "  09:00 IST - Login reminder\n"
+        "  09:25 IST - Market scan\n"
+        "  15:35 IST - EOD summary\n\n"
+        "Or just chat naturally - I understand trading questions!"
     )
 
 
@@ -385,11 +398,163 @@ async def send_alert(app: Application, chat_id: int, message: str) -> None:
     await app.bot.send_message(chat_id=chat_id, text=message)
 
 
+# ── Scheduled Jobs ───────────────────────────────────────────────────────────
+
+
+async def job_pre_market_login(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """9:00 AM IST — Send Kite login link before market opens."""
+    from skopaq.broker.kite_client import get_access_token
+
+    for chat_id in list(alert_chat_ids):
+        token = get_access_token()
+        if token:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "Good morning! Kite is already connected.\n"
+                    "Market opens at 9:15 IST. Standing by for auto-scan at 9:25."
+                ),
+            )
+        else:
+            api_key = os.environ.get("SKOPAQ_KITE_API_KEY", "")
+            login_url = f"https://skopaq-trader.fly.dev/api/kite/login"
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "Good morning! Time to connect to Zerodha.\n\n"
+                    f"Tap to login: {login_url}\n\n"
+                    "After login, I'll auto-scan the market at 9:25 IST "
+                    "and send you the top picks."
+                ),
+            )
+
+
+async def job_market_scan(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """9:25 AM IST — Auto-scan market after prices settle."""
+    from skopaq.broker.kite_client import get_access_token
+
+    if not get_access_token():
+        for chat_id in list(alert_chat_ids):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Kite not connected. Please login first:\nhttps://skopaq-trader.fly.dev/api/kite/login",
+            )
+        return
+
+    for chat_id in list(alert_chat_ids):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Market open! Scanning NIFTY 50 for opportunities...",
+        )
+
+    # Scan top stocks
+    try:
+        _ensure_infra()
+        from skopaq.mcp_server import get_quote
+
+        symbols = [
+            "RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
+            "SBIN", "LT", "BHARTIARTL", "WIPRO", "NTPC",
+        ]
+        results = []
+        for sym in symbols:
+            try:
+                data = json.loads(await get_quote(sym))
+                results.append(data)
+            except Exception:
+                pass
+
+        # Sort by change% (top movers)
+        results.sort(key=lambda x: abs(x.get("change_pct", 0)), reverse=True)
+
+        lines = ["Market Scan (9:25 IST)\n"]
+        for r in results[:8]:
+            emoji = "+" if r["change_pct"] >= 0 else ""
+            lines.append(
+                f"{'  ' if r['change_pct'] >= 0 else ''}{r['symbol']}: "
+                f"Rs {r['ltp']:,.2f} ({emoji}{r['change_pct']:.2f}%) "
+                f"Vol: {r['volume']:,}"
+            )
+
+        # Identify top pick
+        gainers = [r for r in results if r["change_pct"] > 0.5]
+        if gainers:
+            top = gainers[0]
+            lines.append(f"\nTop pick: {top['symbol']} (+{top['change_pct']:.2f}%)")
+            lines.append("Reply 'trade SYMBOL' to execute, or 'analyze SYMBOL' for deep analysis.")
+
+        scan_msg = "\n".join(lines)
+        for chat_id in list(alert_chat_ids):
+            await context.bot.send_message(chat_id=chat_id, text=scan_msg)
+
+    except Exception as exc:
+        logger.exception("Auto-scan failed")
+        for chat_id in list(alert_chat_ids):
+            await context.bot.send_message(chat_id=chat_id, text=f"Scan error: {exc}")
+
+
+async def job_eod_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """3:35 PM IST — End of day P&L summary."""
+    from skopaq.broker.kite_client import get_access_token, KiteClient
+
+    if not get_access_token():
+        return
+
+    try:
+        _ensure_infra()
+        api_key = os.environ.get("SKOPAQ_KITE_API_KEY", "")
+        client = KiteClient(api_key=api_key, access_token=get_access_token())
+
+        positions = await client.get_positions()
+        funds = await client.get_funds()
+
+        total_pnl = sum(p.pnl for p in positions) if positions else 0
+
+        lines = [
+            "Market Closed — EOD Summary\n",
+            f"Cash: Rs {funds.available_cash:,.2f}",
+        ]
+
+        if positions:
+            lines.append(f"\nOpen Positions ({len(positions)}):")
+            for p in positions:
+                lines.append(
+                    f"  {p.symbol}: {int(p.quantity)}x @ {p.average_price:.2f} "
+                    f"P&L: Rs {p.pnl:+,.2f}"
+                )
+            lines.append(f"\nTotal Day P&L: Rs {total_pnl:+,.2f}")
+        else:
+            lines.append("\nNo open positions.")
+
+        msg = "\n".join(lines)
+        for chat_id in list(alert_chat_ids):
+            await context.bot.send_message(chat_id=chat_id, text=msg)
+
+    except Exception as exc:
+        logger.exception("EOD summary failed")
+
+
+async def cmd_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send Kite login link."""
+    alert_chat_ids.add(update.message.chat.id)
+    login_url = "https://skopaq-trader.fly.dev/api/kite/login"
+
+    from skopaq.broker.kite_client import get_access_token
+    if get_access_token():
+        await update.message.reply_text("Already connected to Zerodha!")
+    else:
+        await update.message.reply_text(
+            f"Tap to connect Zerodha:\n{login_url}"
+        )
+
+
 # ── Entry Point ──────────────────────────────────────────────────────────────
 
 
 def main() -> None:
-    """Start the Telegram bot."""
+    """Start the Telegram bot with scheduled jobs."""
+    from datetime import time as dt_time
+
     token = os.environ.get("SKOPAQ_TELEGRAM_BOT_TOKEN", "")
     if not token:
         from skopaq.config import SkopaqConfig
@@ -403,7 +568,7 @@ def main() -> None:
         print("Error: SKOPAQ_TELEGRAM_BOT_TOKEN not set")
         return
 
-    print(f"Starting SkopaqTrader Telegram bot...")
+    print("Starting SkopaqTrader Telegram bot...")
 
     app = Application.builder().token(token).build()
 
@@ -415,11 +580,39 @@ def main() -> None:
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("pnl", cmd_pnl))
     app.add_handler(CommandHandler("analyze", cmd_analyze))
+    app.add_handler(CommandHandler("login", cmd_login))
 
-    # Plain text → quick quote
+    # Plain text → AI chat brain
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
+    # ── Scheduled jobs (IST = UTC+5:30) ──────────────────────────
+    # IST 9:00 = UTC 3:30
+    app.job_queue.run_daily(
+        job_pre_market_login,
+        time=dt_time(hour=3, minute=30, tzinfo=timezone.utc),
+        name="pre_market_login",
+    )
+
+    # IST 9:25 = UTC 3:55
+    app.job_queue.run_daily(
+        job_market_scan,
+        time=dt_time(hour=3, minute=55, tzinfo=timezone.utc),
+        name="market_scan",
+    )
+
+    # IST 15:35 = UTC 10:05
+    app.job_queue.run_daily(
+        job_eod_summary,
+        time=dt_time(hour=10, minute=5, tzinfo=timezone.utc),
+        name="eod_summary",
+    )
+
+    print("Scheduled jobs:")
+    print("  09:00 IST — Pre-market login reminder")
+    print("  09:25 IST — Auto market scan")
+    print("  15:35 IST — EOD P&L summary")
     print("Bot ready. Polling for messages...")
+
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
