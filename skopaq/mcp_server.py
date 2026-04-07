@@ -1618,6 +1618,30 @@ async def run_monte_carlo_test(
         return f"Monte Carlo error: {exc}"
 
 
+@mcp.tool()
+async def evolve_strategy(symbol: str, days: int = 180) -> str:
+    """Run a complete self-evolving strategy cycle.
+
+    Backtests → validates (WFO + Monte Carlo) → adapts parameters →
+    deploys if improved → persists results to Postgres → sends Telegram alert.
+
+    This is the AI learning loop — every run makes the strategy smarter.
+
+    Args:
+        symbol: Stock symbol to evolve strategy for.
+        days: Days of history for backtesting.
+    """
+    try:
+        from skopaq.backtest.evolve import run_evolution_cycle, format_evolution_report
+
+        report = await run_evolution_cycle(symbol, days)
+        return format_evolution_report(report)
+
+    except Exception as exc:
+        logger.exception("Strategy evolution failed")
+        return f"Evolution error: {exc}"
+
+
 def _compute_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
     """Compute RSI indicator."""
     delta = prices.diff()

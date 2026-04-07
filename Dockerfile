@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python deps first (cached layer)
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e . 2>/dev/null || pip install --no-cache-dir . \
-    && pip install --no-cache-dir python-telegram-bot>=21.0 langchain-ollama>=1.0.0 kiteconnect>=5.0.0
+    && pip install --no-cache-dir python-telegram-bot>=21.0 langchain-ollama>=1.0.0 kiteconnect>=5.0.0 psycopg2-binary>=2.9 quantstats>=0.0.80
 
 # Copy application code
 COPY . .
