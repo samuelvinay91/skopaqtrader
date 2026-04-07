@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from skopaq import __version__
@@ -91,6 +91,58 @@ async def kite_status():
         "connected": bool(token),
         "token_length": len(token) if token else 0,
     }
+
+
+@app.post("/api/kite/postback")
+async def kite_postback(request: Request):
+    """Receive real-time order updates from Zerodha.
+
+    Zerodha POSTs order status changes (fill, rejection, cancellation)
+    to this endpoint. We log them and can trigger alerts via Telegram.
+    """
+    import json
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = dict(await request.form())
+
+    order_id = body.get("order_id", "?")
+    status = body.get("status", "?")
+    symbol = body.get("tradingsymbol", "?")
+    txn = body.get("transaction_type", "?")
+    qty = body.get("filled_quantity", body.get("quantity", 0))
+    price = body.get("average_price", 0)
+
+    logger.info(
+        "Kite postback: %s %s %s qty=%s price=%s status=%s",
+        txn, symbol, order_id, qty, price, status,
+    )
+
+    # Send Telegram alert if bot token is available
+    try:
+        import os
+        tg_token = os.environ.get("SKOPAQ_TELEGRAM_BOT_TOKEN", "")
+        if tg_token:
+            from telegram import Bot
+            from skopaq.broker.kite_client import get_access_token
+
+            bot = Bot(tg_token)
+            # Send to known chat IDs (stored from telegram bot sessions)
+            alert = (
+                f"Order Update\n\n"
+                f"{txn} {symbol}\n"
+                f"Status: {status}\n"
+                f"Qty: {qty} @ Rs {price}\n"
+                f"Order: {order_id}"
+            )
+            # We'll broadcast to the last known chat_id
+            # For now just log — the Telegram bot picks it up via polling
+            logger.info("Postback alert: %s", alert)
+    except Exception:
+        pass
+
+    return {"status": "ok"}
 
 
 @app.get("/health")
