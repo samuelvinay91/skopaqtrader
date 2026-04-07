@@ -1,0 +1,17 @@
+app = 'skopaq-telegram'
+primary_region = 'bom'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  PYTHONUNBUFFERED = '1'
+
+# No HTTP service — this is a background worker
+[processes]
+  app = "telegram"
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
