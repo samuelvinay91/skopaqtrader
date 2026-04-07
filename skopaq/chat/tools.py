@@ -33,18 +33,36 @@ def _get_infra() -> Infrastructure:
 
 
 def _get_kite_client():
-    """Return a connected KiteClient if available, else None."""
-    try:
-        from skopaq.broker.kite_client import KiteClient, get_access_token
+    """Return a connected KiteClient if available, else None.
 
-        token = get_access_token()
+    Only returns a client if both API key AND access token are available.
+    The access token is checked from memory/file/env only — no remote
+    fetch during this call (to avoid hanging in tests or offline use).
+    """
+    try:
+        from skopaq.broker.kite_client import KiteClient
+
+        # Check memory-level token only (don't trigger remote fetch)
+        import skopaq.broker.kite_client as _kmod
+
+        token = _kmod._access_token
+        if not token:
+            # Check file
+            try:
+                import json
+
+                with open(_kmod._TOKEN_FILE) as f:
+                    token = json.load(f).get("access_token", "")
+            except Exception:
+                pass
         if not token:
             return None
+
         config = _get_infra().config
-        return KiteClient(
-            api_key=config.kite_api_key,
-            access_token=token,
-        )
+        api_key = getattr(config, "kite_api_key", "")
+        if not api_key:
+            return None
+        return KiteClient(api_key=api_key, access_token=token)
     except Exception:
         return None
 

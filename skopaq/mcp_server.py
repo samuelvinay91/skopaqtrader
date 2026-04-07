@@ -559,6 +559,115 @@ async def place_order(
     })
 
 
+# ── Options Tools ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def get_option_chain(
+    symbol: str = "NIFTY",
+    expiry_index: int = 0,
+) -> str:
+    """Fetch the option chain for NIFTY, BANKNIFTY, or any stock.
+
+    Returns all calls and puts with strike, premium, OI, volume,
+    and distance from spot. Used by the AI for options strategy selection.
+
+    Args:
+        symbol: Underlying (NIFTY, BANKNIFTY, RELIANCE, etc.)
+        expiry_index: 0 = nearest expiry, 1 = next week, etc.
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected. Login first."})
+
+    try:
+        from skopaq.options.chain import fetch_option_chain
+
+        chain = await fetch_option_chain(kite, symbol, expiry_index)
+
+        return json.dumps({
+            "symbol": chain.symbol,
+            "spot_price": chain.spot_price,
+            "expiry": str(chain.expiry),
+            "lot_size": chain.lot_size,
+            "calls_count": len(chain.calls),
+            "puts_count": len(chain.puts),
+            "calls": [
+                {
+                    "strike": c.strike, "ltp": c.ltp, "oi": c.oi,
+                    "volume": c.volume, "distance_pct": round(c.distance_pct, 2),
+                    "tradingsymbol": c.tradingsymbol,
+                }
+                for c in chain.calls if c.ltp > 0
+            ][:15],  # Top 15
+            "puts": [
+                {
+                    "strike": p.strike, "ltp": p.ltp, "oi": p.oi,
+                    "volume": p.volume, "distance_pct": round(p.distance_pct, 2),
+                    "tradingsymbol": p.tradingsymbol,
+                }
+                for p in chain.puts if p.ltp > 0
+            ][:15],
+        })
+
+    except Exception as exc:
+        logger.exception("Option chain fetch failed")
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def suggest_option_trade(
+    symbol: str = "NIFTY",
+    strategy: str = "SHORT_PUT",
+    expiry_index: int = 0,
+) -> str:
+    """AI-powered option trade suggestion. Analyzes the chain and recommends
+    the optimal strike to sell with full risk metrics.
+
+    Strategies:
+    - SHORT_PUT: Sell OTM put (bullish view, profit from theta)
+    - SHORT_CALL: Sell OTM call (bearish view, profit from theta)
+    - SHORT_STRANGLE: Sell OTM put + call (neutral view, max theta)
+
+    Args:
+        symbol: Underlying (NIFTY, BANKNIFTY, RELIANCE, etc.)
+        strategy: SHORT_PUT, SHORT_CALL, or SHORT_STRANGLE
+        expiry_index: 0 = nearest expiry, 1 = next week
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected. Login first."})
+
+    try:
+        from skopaq.options.chain import fetch_option_chain
+        from skopaq.options.strategy import (
+            select_short_put,
+            select_short_call,
+            select_short_strangle,
+            format_trade_for_telegram,
+        )
+
+        chain = await fetch_option_chain(kite, symbol, expiry_index)
+
+        if strategy == "SHORT_PUT":
+            trade = select_short_put(chain)
+        elif strategy == "SHORT_CALL":
+            trade = select_short_call(chain)
+        elif strategy == "SHORT_STRANGLE":
+            trade = select_short_strangle(chain)
+        else:
+            return json.dumps({"error": f"Unknown strategy: {strategy}"})
+
+        if not trade:
+            return json.dumps({"error": f"No suitable {strategy} trade found for {symbol}"})
+
+        return format_trade_for_telegram(trade)
+
+    except Exception as exc:
+        logger.exception("Option trade suggestion failed")
+        return json.dumps({"error": str(exc)})
+
+
 # ── Data Gathering Tools (for Claude-native analysis) ────────────────────────
 # These tools fetch raw data that the multi-agent pipeline analysts need.
 # Claude Code reasons with this data directly — no separate LLM calls.

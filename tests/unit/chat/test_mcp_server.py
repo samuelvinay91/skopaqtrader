@@ -33,6 +33,8 @@ def test_mcp_server_has_all_tools():
         "recall_agent_memories",
         "gather_all_analysis_data",
         "save_trade_reflection",
+        "get_option_chain",
+        "suggest_option_trade",
     }
     assert tool_names == expected
 
