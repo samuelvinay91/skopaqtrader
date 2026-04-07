@@ -831,6 +831,260 @@ async def setup_swing_trade(
         return json.dumps({"error": str(exc)})
 
 
+# ── Advanced Order Types ─────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def place_amo_order(
+    symbol: str,
+    side: str = "BUY",
+    quantity: int = 1,
+    price: float = 0,
+) -> str:
+    """Place an After Market Order — executes at next day's open (9:15 AM).
+
+    Can be placed between 3:30 PM and 9:00 AM. Perfect for evening analysis.
+
+    Args:
+        symbol: Stock symbol (e.g., RELIANCE).
+        side: BUY or SELL.
+        quantity: Number of shares.
+        price: Limit price.
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.trading.advanced_orders import place_amo
+
+        result = await place_amo(kite, symbol, side, quantity, price)
+        return json.dumps({"success": True, **result,
+            "message": f"AMO {side} {quantity}x {symbol} @ Rs {price} — executes at 9:15 AM"})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def place_bracket(
+    symbol: str,
+    side: str = "BUY",
+    quantity: int = 1,
+    price: float = 0,
+    stoploss_points: float = 10,
+    target_points: float = 20,
+    trailing_sl: float = 0,
+) -> str:
+    """Place a Bracket Order — entry + target + stop-loss in one order (intraday).
+
+    All three legs managed by exchange. Auto-squared at 3:20 PM.
+
+    Args:
+        symbol: Stock symbol.
+        side: BUY or SELL.
+        quantity: Number of shares.
+        price: Entry limit price.
+        stoploss_points: Stop-loss distance in points from entry.
+        target_points: Target distance in points from entry.
+        trailing_sl: Trailing stop-loss distance (0 = disabled).
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.trading.advanced_orders import place_bracket_order
+
+        result = await place_bracket_order(
+            kite, symbol, side, quantity, price,
+            stoploss_points, target_points, trailing_sl,
+        )
+        return json.dumps({"success": True, **result})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def place_cover(
+    symbol: str,
+    side: str = "BUY",
+    quantity: int = 1,
+    price: float = 0,
+    stoploss_price: float = 0,
+) -> str:
+    """Place a Cover Order — entry + mandatory stop-loss (intraday, reduced margin).
+
+    Args:
+        symbol: Stock symbol.
+        side: BUY or SELL.
+        quantity: Number of shares.
+        price: Entry limit price.
+        stoploss_price: Stop-loss trigger price (absolute).
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.trading.advanced_orders import place_cover_order
+
+        result = await place_cover_order(kite, symbol, side, quantity, price, stoploss_price)
+        return json.dumps({"success": True, **result})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def place_basket(orders_json: str) -> str:
+    """Place multiple orders as a basket — execute the scanner's top picks at once.
+
+    Args:
+        orders_json: JSON array of orders, each with: symbol, side, quantity, price.
+            Example: [{"symbol":"TCS","side":"BUY","quantity":1,"price":2500}]
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        orders = json.loads(orders_json)
+        from skopaq.trading.advanced_orders import place_basket_orders
+
+        results = await place_basket_orders(kite, orders)
+        return json.dumps({"success": True, "orders": results})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def buy_option_contract(
+    tradingsymbol: str,
+    quantity: int = 1,
+    price: float = 0,
+) -> str:
+    """Buy an option contract for directional trades (defined risk = premium paid).
+
+    Use get_option_chain first to find the right contract.
+
+    Args:
+        tradingsymbol: Full option symbol (e.g., NIFTY2641323200CE).
+        quantity: Number of lots x lot_size.
+        price: Limit price (0 = market).
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.trading.advanced_orders import buy_option
+
+        result = await buy_option(kite, tradingsymbol, quantity, price)
+        return json.dumps({"success": True, **result})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def trade_future(
+    tradingsymbol: str,
+    side: str = "BUY",
+    quantity: int = 1,
+    price: float = 0,
+) -> str:
+    """Trade futures contracts (NIFTY/BANKNIFTY/stock futures).
+
+    Args:
+        tradingsymbol: Futures symbol (e.g., NIFTY26APRFUT).
+        side: BUY or SELL.
+        quantity: Number of lots x lot_size.
+        price: Limit price (0 = market).
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.trading.advanced_orders import trade_futures
+
+        result = await trade_futures(kite, tradingsymbol, side, quantity, price)
+        return json.dumps({"success": True, **result})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def invest_mutual_fund(
+    tradingsymbol: str,
+    amount: float,
+    sip: bool = False,
+    frequency: str = "monthly",
+) -> str:
+    """Invest in mutual funds — lumpsum or SIP.
+
+    Args:
+        tradingsymbol: MF tradingsymbol (e.g., INF846K01DP8).
+        amount: Investment amount in INR.
+        sip: True for SIP, False for lumpsum.
+        frequency: SIP frequency (monthly, weekly) — only for SIP.
+    """
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        if sip:
+            from skopaq.trading.advanced_orders import place_mf_sip
+
+            result = await place_mf_sip(kite, tradingsymbol, amount, frequency)
+        else:
+            from skopaq.trading.advanced_orders import place_mf_order
+
+            result = await place_mf_order(kite, tradingsymbol, amount)
+
+        return json.dumps({"success": True, **result})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+async def list_mutual_funds() -> str:
+    """List mutual fund holdings and active SIPs."""
+    kite = _get_kite()
+    if not kite:
+        return json.dumps({"error": "Kite not connected"})
+
+    try:
+        from skopaq.trading.advanced_orders import list_mf_holdings, list_mf_sips
+
+        holdings = await list_mf_holdings(kite)
+        sips = await list_mf_sips(kite)
+
+        return json.dumps({
+            "holdings": [
+                {
+                    "fund": h.get("tradingsymbol", ""),
+                    "units": h.get("quantity", 0),
+                    "avg_price": h.get("average_price", 0),
+                    "ltp": h.get("last_price", 0),
+                    "pnl": h.get("pnl", 0),
+                }
+                for h in holdings
+            ],
+            "sips": [
+                {
+                    "fund": s.get("tradingsymbol", ""),
+                    "amount": s.get("instalment_amount", 0),
+                    "frequency": s.get("frequency", ""),
+                    "status": s.get("status", ""),
+                    "next_date": str(s.get("next_instalment_date", "")),
+                }
+                for s in sips
+            ],
+        })
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
 # ── Data Gathering Tools (for Claude-native analysis) ────────────────────────
 # These tools fetch raw data that the multi-agent pipeline analysts need.
 # Claude Code reasons with this data directly — no separate LLM calls.
