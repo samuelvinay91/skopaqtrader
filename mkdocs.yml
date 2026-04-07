@@ -1,0 +1,89 @@
+site_name: SkopaqTrader Docs
+site_description: AI Algorithmic Trading Platform for Indian Equities
+site_url: https://samuelvinay91.github.io/skopaqtrader/
+repo_url: https://github.com/samuelvinay91/skopaqtrader
+repo_name: samuelvinay91/skopaqtrader
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: cyan
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Light mode
+    - scheme: default
+      primary: cyan
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Configuration: getting-started/configuration.md
+  - Claude Code Integration:
+    - Setup: claude-code/setup.md
+    - MCP Tools: claude-code/mcp-tools.md
+    - Custom Skills: claude-code/skills.md
+    - Dual-Mode Analysis: claude-code/dual-mode.md
+  - Trading:
+    - Equity Analysis: trading/equity-analysis.md
+    - Options Selling: trading/options-selling.md
+    - GTT Orders: trading/gtt-orders.md
+    - Swing Trading: trading/swing-trading.md
+    - Live Trading: trading/live-trading.md
+  - Telegram Bot:
+    - Setup: telegram/setup.md
+    - Commands: telegram/commands.md
+    - Scheduled Jobs: telegram/scheduler.md
+  - Architecture:
+    - Multi-Agent Pipeline: architecture/pipeline.md
+    - MCP Server: architecture/mcp-server.md
+    - Kite Connect: architecture/kite-connect.md
+    - Ollama Local Models: architecture/ollama.md
+    - Notifications: architecture/notifications.md
+  - Deployment:
+    - Docker: deployment/docker.md
+    - Fly.io: deployment/flyio.md
+  - Contributing:
+    - Guide: contributing/guide.md
+    - Adding Skills: contributing/skills.md
+    - Adding MCP Tools: contributing/mcp-tools.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/samuelvinay91/skopaqtrader
+
+copyright: "Apache 2.0 — Built on TradingAgents by TauricResearch"

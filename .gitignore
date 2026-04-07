@@ -264,3 +264,4 @@ Thumbs.db
 # dotenv overrides
 .env.local
 .env.*.local
+site/
