@@ -76,14 +76,26 @@ def _get_router():
 
 
 def _get_kite():
-    """Return a connected KiteClient if available."""
-    try:
-        from skopaq.broker.kite_client import KiteClient, get_access_token
+    """Return a connected KiteClient if available.
 
+    Always reads the latest token from file/API — never caches stale tokens.
+    This ensures the MCP server (long-running process) picks up new tokens
+    after daily Kite login without restart.
+    """
+    try:
+        from skopaq.broker.kite_client import KiteClient
+        import skopaq.broker.kite_client as _kmod
+
+        # Force re-read from file/API every time (don't trust memory cache)
+        _kmod._access_token = ""  # Clear memory cache
+
+        from skopaq.broker.kite_client import get_access_token
         token = get_access_token()
         if not token:
             return None
         config = _get_config()
+        if not config.kite_api_key:
+            return None
         return KiteClient(api_key=config.kite_api_key, access_token=token)
     except Exception:
         return None
