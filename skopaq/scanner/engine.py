@@ -21,7 +21,9 @@ from skopaq.scanner.screen import (
     build_news_prompt,
     build_screen_prompt,
     build_social_prompt,
+    build_tavily_news_query,
     parse_screen_response,
+    parse_tavily_results,
 )
 from skopaq.scanner.watchlist import Watchlist
 
@@ -67,6 +69,7 @@ class ScannerEngine:
         self._llm_screener = llm_screener or self._default_llm_screener
         self._news_screener = news_screener
         self._social_screener = social_screener
+        self._tavily_client = self._init_tavily_client()
         self.candidate_queue: asyncio.Queue[ScannerCandidate] = asyncio.Queue()
 
         # State
@@ -190,6 +193,13 @@ class ScannerEngine:
                 name="screen_news",
             ))
 
+        # Optional: Tavily news screening (structured web search)
+        if self._tavily_client:
+            tasks.append(asyncio.create_task(
+                self._screen_news_tavily(symbols),
+                name="screen_news_tavily",
+            ))
+
         # Optional: social screening (Grok)
         if self._social_screener:
             tasks.append(asyncio.create_task(
@@ -240,6 +250,40 @@ class ScannerEngine:
         for c in candidates:
             c.metrics["source"] = "social"
         return candidates
+
+    async def _screen_news_tavily(self, symbols: list[str]) -> list[ScannerCandidate]:
+        """News screening via Tavily web search API (structured results)."""
+        query = build_tavily_news_query(symbols)
+        response = await self._tavily_client.search(
+            query=query,
+            max_results=10,
+            search_depth="basic",
+            topic="news",
+        )
+        candidates = parse_tavily_results(
+            response.get("results", []),
+            max_candidates=3,
+        )
+        for c in candidates:
+            c.metrics["source"] = "news_tavily"
+        return candidates
+
+    @staticmethod
+    def _init_tavily_client():
+        """Initialise TavilyClient if TAVILY_API_KEY is available."""
+        import os
+        api_key = os.environ.get("TAVILY_API_KEY", "")
+        if not api_key:
+            # Also check SKOPAQ_ prefix (before bridge runs)
+            api_key = os.environ.get("SKOPAQ_TAVILY_API_KEY", "")
+        if not api_key:
+            return None
+        try:
+            from tavily import AsyncTavilyClient
+            return AsyncTavilyClient(api_key=api_key)
+        except Exception as exc:
+            logger.warning("Failed to initialise TavilyClient: %s", exc)
+            return None
 
     @staticmethod
     def _deduplicate(
@@ -313,6 +357,8 @@ class ScannerEngine:
         active = ["technical"]
         if self._news_screener:
             active.append("news")
+        if self._tavily_client:
+            active.append("news_tavily")
         if self._social_screener:
             active.append("social")
         return {"active": active, "count": len(active)}

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -143,3 +144,95 @@ class TestScannerEngine:
         engine = ScannerEngine(watchlist=Watchlist(["A"]))
         candidates = await engine.scan_once()
         assert candidates == []
+
+
+class TestInitTavilyClient:
+    def test_returns_none_when_no_env_var(self):
+        env = {"SKOPAQ_TRADING_MODE": "paper"}
+        with patch.dict("os.environ", env, clear=True):
+            client = ScannerEngine._init_tavily_client()
+            assert client is None
+
+    def test_returns_client_when_tavily_key_set(self):
+        import unittest.mock as um
+        mock_module = um.MagicMock()
+        mock_client_instance = um.MagicMock()
+        mock_module.AsyncTavilyClient.return_value = mock_client_instance
+
+        with patch.dict("os.environ", {"TAVILY_API_KEY": "tvly-test123"}, clear=False):
+            with patch.dict("sys.modules", {"tavily": mock_module}):
+                client = ScannerEngine._init_tavily_client()
+                assert client is mock_client_instance
+                mock_module.AsyncTavilyClient.assert_called_once_with(api_key="tvly-test123")
+
+    def test_returns_client_when_skopaq_key_set(self):
+        import unittest.mock as um
+        mock_module = um.MagicMock()
+        mock_client_instance = um.MagicMock()
+        mock_module.AsyncTavilyClient.return_value = mock_client_instance
+
+        env = {"SKOPAQ_TAVILY_API_KEY": "tvly-test456", "SKOPAQ_TRADING_MODE": "paper"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch.dict("sys.modules", {"tavily": mock_module}):
+                client = ScannerEngine._init_tavily_client()
+                assert client is mock_client_instance
+
+    def test_returns_none_on_import_error(self):
+        import sys as _sys
+        # Remove tavily from sys.modules if present, then make import fail
+        with patch.dict("os.environ", {"TAVILY_API_KEY": "tvly-test123"}, clear=False):
+            with patch.dict("sys.modules", {"tavily": None}):
+                client = ScannerEngine._init_tavily_client()
+                assert client is None
+
+
+class TestScreenNewsTavily:
+    @pytest.mark.asyncio
+    async def test_calls_tavily_and_returns_candidates(self):
+        mock_client = AsyncMock()
+        mock_client.search.return_value = {
+            "results": [
+                {"title": "RELIANCE surges on strong Q4", "content": "Details.", "score": 0.9, "url": "http://example.com"},
+            ]
+        }
+
+        engine = ScannerEngine(watchlist=Watchlist(["RELIANCE"]))
+        engine._tavily_client = mock_client
+
+        candidates = await engine._screen_news_tavily(["RELIANCE"])
+        assert len(candidates) >= 1
+        assert candidates[0].metrics["source"] == "news_tavily"
+        mock_client.search.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_empty_results_returns_empty(self):
+        mock_client = AsyncMock()
+        mock_client.search.return_value = {"results": []}
+
+        engine = ScannerEngine(watchlist=Watchlist(["A"]))
+        engine._tavily_client = mock_client
+
+        candidates = await engine._screen_news_tavily(["A"])
+        assert candidates == []
+
+    @pytest.mark.asyncio
+    async def test_tavily_included_in_parallel_screeners(self):
+        """When _tavily_client is set, it runs alongside other screeners."""
+        mock_client = AsyncMock()
+        mock_client.search.return_value = {"results": []}
+
+        async def mock_fetcher(syms):
+            return _make_quotes(syms)
+
+        async def mock_screener(prompt):
+            return "[]"
+
+        engine = ScannerEngine(
+            watchlist=Watchlist(["A"]),
+            quote_fetcher=mock_fetcher,
+            llm_screener=mock_screener,
+        )
+        engine._tavily_client = mock_client
+
+        await engine.scan_once()
+        mock_client.search.assert_awaited_once()
